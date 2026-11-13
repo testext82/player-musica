@@ -9,15 +9,20 @@ Player web personale che ascolta in streaming FLAC e altri formati audio dalla *
 - I brani non vengono salvati: vengono letti in streaming tramite link temporanei di Dropbox.
 
 ## Organizzazione delle cartelle
+Basta copiare le cartelle degli album così come sono dentro `Applicazioni/<nome app>/`.
+L'app ricava artista, album e anno dal nome della cartella e poi li corregge con i tag dei FLAC o con il file `.cue`:
 ```
-Applicazioni/<nome app>/Artista/Album/01 Brano.flac
-Applicazioni/<nome app>/Artista/2019 - Album/cover.jpg
-Applicazioni/<nome app>/Artista/Album (CD doppio)/CD1/…
+Adele - 21 (2011) [FLAC 16-44]/01. Adele - Rolling in the Deep.flac
+1983 - Pantera - Metal Magic (LP, …, 24-48)/01 - Ride My Rocket.m4a
+Black Sabbath 1970 - Paranoid [SACD] (2010 SHM-SACD ISO) flac 24-48/Paranoid (1) War Pigs.flac
+Nirvana - In Utero (…) (2023) [16Bit-44.1kHz] FLAC/Disc 1/01. ….flac
+1956. Harry Belafonte - Calypso {AFZ 138}/… .flac + … .cue   (album in un file unico)
+Artista/Album/01 Brano.flac                                      (struttura classica)
 ```
-- Copertina: un'immagine nella cartella dell'album (preferibilmente `cover.jpg` o `folder.jpg`); in mancanza, quella incorporata nel FLAC.
-- Titolo, artista, durata e qualità (es. FLAC 24/96) vengono letti dai tag dei FLAC (solo i primi 64 KB di ogni file).
+- Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
+- Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.0)
+## Funzioni (v1.1)
 Libreria per artisti e album, ricerca, coda con riproduzione casuale e ripetizione, ±10 secondi,
 comandi sulla schermata di blocco (brano precedente/successivo), ripresa dal punto interrotto,
 aggiornamento incrementale della libreria, diagnostica in Impostazioni.

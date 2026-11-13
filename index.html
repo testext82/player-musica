@@ -165,19 +165,243 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.0';
+const VERSION = '1.1';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
 const CONTENT = 'https://content.dropboxapi.com/2/';
 const SCOPES = 'files.metadata.read files.content.read';
 const REDIRECT_URI = location.origin + location.pathname;
-const AUDIO_EXT = ['flac', 'mp3', 'm4a', 'aac', 'wav', 'aif', 'aiff', 'alac', 'ogg', 'opus', 'caf'];
-const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
 const K = { appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
-            index: 'mx_index_v1', tags: 'mx_tags_v1', resume: 'mx_resume_v1', libTab: 'mx_libtab' };
+            index: 'mx_index_v2', tags: 'mx_tags_v1', ameta: 'mx_ameta_v1', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
+
+/* ---------------- riconoscimento della libreria (funzioni pure) ---------------- */
+const AUDIO_EXT = ['flac', 'mp3', 'm4a', 'aac', 'wav', 'aif', 'aiff', 'alac', 'ogg', 'opus', 'caf'];
+const IMG_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+const INDEX_EXT = [...AUDIO_EXT, ...IMG_EXT, 'cue'];
+function ext(n) { const i = n.lastIndexOf('.'); return i < 0 ? '' : n.slice(i + 1).toLowerCase(); }
+function baseName(n) { const i = n.lastIndexOf('.'); return i < 0 ? n : n.slice(0, i); }
+const natural = (a, b) => a.localeCompare(b, 'it', { numeric: true, sensitivity: 'base' });
+const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SEP = /\s+[-–—]\s+/;
+const DISC_RE = /^(cd|disc|disk|disco|dvd)\s*[-_.]?\s*\d+\b/i;
+const JUNK_GROUP = /\b(flac|flaac|alac|wav|sacd(-r)?|shm|iso|hi-?res|pmedia|pbthal|lp|\d*cd\d*|records?|edition|remaster(ed)?|mmr|afz|epic|monkeywrench|japan(ese)?|vinyl|web|mp3|aac|dsd|mqa)\b|\b\d{2}\s?[-_/]\s?\d{2,3}(\.\d)?\b|\d{2}\s?bit|\bkhz\b/i;
+const TAIL = /\s+(flac|flaac|alac|cd|lp|soup|atm|88|remaster(ed)?|\d{2}[-_]\d{2,3}|(16|24)\s?bit|japan(ese)?\s+ed(ition)?)$/i;
+
+function titleCaseIfShouting(s) {
+  if (!s || /[a-zà-ÿ]/.test(s) || !/\s/.test(s.trim())) return s;
+  return s.toLowerCase().replace(/(^|[\s(\[\-/&])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+}
+function cleanArtist(a) { return (a || '').replace(/\s+(feat\.?|ft\.?|featuring)\s.+$/i, '').trim(); }
+function stripGroups(s, years) {
+  return s.replace(/[\(\[\{]([^\)\]\}]*)[\)\]\}]/g, (all, g) => {
+    const g2 = g.trim(); let m;
+    if ((m = g2.match(/^((?:19|20)\d{2})(?:\s*[-–]\s*(?:19|20)?\d{2,4})?(?:\s+(?!remaster|remix|mix|edition|reissue|deluxe|version)[A-Za-zÀ-ÿ]+)?$/i))) { years.push([m[1], 1]); return ' '; }
+    if (JUNK_GROUP.test(g2)) { const y = g2.match(/\b((?:19|20)\d{2})\b/); if (y) years.push([y[1], 4]); return ' '; }
+    return all;
+  });
+}
+function stripTail(s, years) {
+  for (let i = 0; i < 8; i++) {
+    const before = s;
+    s = s.replace(TAIL, '').trim();
+    if (!years.some(y => y[1] < 3)) { const m = s.match(/^(.+\S)\s+((?:19|20)\d{2})$/); if (m && !/[-–]$/.test(m[1])) { years.push([m[2], 3]); s = m[1].trim(); } }
+    if (s === before) break;
+  }
+  return s;
+}
+function cleanTitle(t) {
+  const years = [];
+  let s = stripGroups((t || '').replace(/[⬀-⯿️]|[\u{1F000}-\u{1FAFF}]/gu, ' '), years).replace(/\s+/g, ' ').trim();
+  s = s.replace(TAIL, '').trim();
+  return s;
+}
+function parseAlbumFolder(name) {
+  const years = [];
+  let s = name.replace(/[⬀-⯿️]|[\u{1F000}-\u{1FAFF}]/gu, ' ');
+  s = stripGroups(s, years).replace(/\s+/g, ' ').trim();
+  s = stripTail(s, years);
+  let m = s.match(/^((?:19|20)\d{2})\s*[.\-–)]\s*(.+)$/);
+  if (m) { years.push([m[1], 2]); s = m[2].trim(); }
+  const hadSep = SEP.test(s) || /\s[-–]$/.test(s);
+  s = s.replace(/\s*[-–]\s*$/, '').trim();
+  const parts = s.split(SEP).map(x => x.trim()).filter(Boolean);
+  const isYear = x => /^(19|20)\d{2}$/.test(x);
+  let artist = '', title = '';
+  if (parts.length >= 3 && isYear(parts[1])) { artist = parts[0]; years.push([parts[1], 2]); title = parts.slice(2).join(' - '); }
+  else if (parts.length >= 3 && isYear(parts[parts.length - 1]) && !/(19|20)\d{2}$/.test(parts[parts.length - 2])) { artist = parts[0]; years.push([parts[parts.length - 1], 2]); title = parts.slice(1, -1).join(' - '); }
+  else if (parts.length >= 2) { artist = parts[0]; title = parts.slice(1).join(' - '); }
+  else if (parts.length === 1 && hadSep) { artist = parts[0]; title = ''; }
+  else title = parts[0] || '';
+  m = artist.match(/^(.+?)\s+((?:19|20)\d{2})$/);
+  if (m) { artist = m[1]; years.push([m[2], 2]); }
+  if (/^(self[- ]?titled|s\/t|omonimo)$/i.test(title)) title = '';
+  years.sort((a, b) => a[1] - b[1]);
+  return { artist: artist.trim(), title: title.trim(), year: years.length ? years[0][0] : '', guessed: !artist };
+}
+function parseTrackName(n, artist) {
+  let b = baseName(n).replace(/_/g, ' ').replace(/\s+/g, ' ').trim(), num = null, label = null, m;
+  if ((m = b.match(/^([A-Da-d])(\d{1,2})\s*[-.]\s*(.+)$/))) { label = m[1].toUpperCase() + m[2]; b = m[3]; }
+  else if ((m = b.match(/^(?:\d{1,2}[-.](?=\d))?(\d{1,3})(?!\d)(?:\s*[-.)]\s*|\s+)(.+)$/))) { num = parseInt(m[1], 10); b = m[2]; }
+  else if ((m = b.match(/^(.*?)\s*\((\d{1,3})\)\s+(.+)$/))) { num = parseInt(m[2], 10); b = m[3]; }
+  if (artist) {
+    const re = new RegExp('^' + escapeRe(artist).replace(/\s+/g, '[\\s_-]+') + '\\s*[-–]\\s*', 'i');
+    b = b.replace(re, '');
+  }
+  b = b.replace(/\s+/g, ' ').replace(/^[\s\-–.]+/, '').replace(/[\s_]+$/, '').trim();
+  return { num, label: label || (num != null ? String(num) : null), title: b || baseName(n) };
+}
+function coverScore(name, depthBelow) {
+  const b = baseName(name).toLowerCase().replace(/[_\-.]+/g, ' ').trim();
+  const front = /\bfront\b/.test(b);
+  if (!front && /\b(back|rear|disc|cd|booklet|inside|inlay|tray|label|matrix|spine|obi|spek|jolly|roger|proof|header|side|sleeve|insert|logo|poster|sticker|spectr\w*|dr\d*)\b/.test(b)) return -1;
+  let s = 10;
+  if (/^(cover|folder|front|album|copertina)$/.test(b)) s = 100;
+  else if (front) s = 80;
+  else if (/cover/.test(b)) s = 70;
+  return s - depthBelow * 5;
+}
+function albumLike(n) { return /\b(19|20)\d{2}\b/.test(n) || /\s[-–—]\s/.test(n) || /[\[\{(]/.test(n) || /\b(flac|cd|lp|sacd|hi-?res)\b/i.test(n); }
+
+function buildLibCore(IDXFILES, AMETA, CUES) {
+  const albums = new Map(), tracks = new Map(), audioByFolder = new Map(), artistFolderImg = new Map();
+  const entries = Object.entries(IDXFILES).map(([lower, f]) => {
+    const segs = f[0].split('/').slice(1), name = segs[segs.length - 1];
+    return { lower, disp: f[0], size: f[1], rev: f[2], segs, name, ext: ext(name), folder: lower.slice(0, lower.lastIndexOf('/')) };
+  });
+  for (const e of entries) if (AUDIO_EXT.includes(e.ext)) { if (!audioByFolder.has(e.folder)) audioByFolder.set(e.folder, []); audioByFolder.get(e.folder).push(e); }
+  const imageCue = new Map();
+  for (const e of entries) if (e.ext === 'cue') {
+    const aud = audioByFolder.get(e.folder) || [];
+    if (aud.length !== 1) continue;
+    const a = aud[0], prev = imageCue.get(a.lower);
+    if (!prev || baseName(e.name).toLowerCase() === baseName(a.name).toLowerCase()) imageCue.set(a.lower, e);
+  }
+  for (const e of entries) {
+    if (!AUDIO_EXT.includes(e.ext)) continue;
+    const folders = e.segs.slice(0, -1);
+    let depth;
+    if (!folders.length) depth = 0;
+    else if (folders.length === 1) depth = 1;
+    else if (DISC_RE.test(folders[folders.length - 1])) depth = folders.length - 1;
+    else if (albumLike(folders[0])) depth = 1;
+    else depth = 2;
+    const key = depth === 0 ? '~root' : '/' + folders.slice(0, depth).join('/').toLowerCase();
+    if (!albums.has(key)) albums.set(key, { key, folder: depth ? folders[depth - 1] : '', artistFolder: depth >= 2 ? folders[depth - 2] : '', files: [], img: null, imgScore: -1, imgLen: 999 });
+    e.disc = folders.slice(depth).join(' / ');
+    albums.get(key).files.push(e);
+  }
+  for (const al of albums.values()) {
+    if (al.key === '~root') { Object.assign(al, { artist: 'Varie', title: 'Brani sciolti', year: '', guessed: false }); continue; }
+    const p = parseAlbumFolder(al.folder);
+    if (al.artistFolder) {
+      const af = al.artistFolder;
+      if (p.guessed) p.title = p.title; else if (norm(p.artist) !== norm(af)) p.title = p.artist + ' - ' + p.title;
+      p.artist = af; p.guessed = false;
+    }
+    Object.assign(al, p);
+  }
+  for (const al of albums.values()) if (al.guessed && !al.artist && al.files.length) {
+    // nomi come «01-arctic_monkeys-star_treatment»: l'artista è nel nome del file
+    const m = al.files.slice().sort((a, b) => natural(a.name, b.name))[0].name.match(/^\d{1,3}[-_. ]+([a-z0-9]+(?:_[a-z0-9]+)+)-/i);
+    if (m) { const slug = m[1].replace(/_/g, ' ').toLowerCase(); if (norm(al.title).startsWith(slug + ' ')) { al.artist = al.title.slice(0, slug.length); al.title = al.title.slice(slug.length).trim(); al.guessed = false; } }
+  }
+  const known = [...new Set([...albums.values()].filter(a => a.artist && !a.guessed).map(a => a.artist))].sort((x, y) => y.length - x.length);
+  for (const al of albums.values()) if (al.guessed && !al.artist) {
+    const n = norm(al.title), hit = known.find(k => n.startsWith(norm(k) + ' '));
+    if (hit) { al.artist = hit; al.title = al.title.slice(hit.length).replace(/^[\s\-–:]+/, '').trim(); al.guessed = false; }
+  }
+  for (const al of albums.values()) {
+    al.files.sort((a, b) => natural(a.disc, b.disc) || natural(a.name, b.name));
+    let src = null;
+    for (const f of al.files) { const c = imageCue.get(f.lower); if (c) { src = { kind: 'cue', path: c.lower, rev: c.rev, file: f.lower }; break; } }
+    if (!src) { const fl = al.files.find(f => f.ext === 'flac'); if (fl) src = { kind: 'flac', path: fl.lower, rev: fl.rev }; }
+    al.metaSrc = src;
+    const m = AMETA[al.key];
+    if (m && src && m.r === src.rev) {
+      if (m.a) al.artist = cleanArtist(m.a);
+      if (m.t) al.title = cleanTitle(m.t) || al.title;
+      if (!al.year && m.y) al.year = m.y;
+    }
+    if (!al.title) al.title = al.artist || al.folder;
+    al.artist = titleCaseIfShouting(al.artist || '');
+    al.title = titleCaseIfShouting(al.title);
+  }
+  const artists = new Map();
+  for (const al of albums.values()) {
+    const key = al.artist ? 'a:' + norm(al.artist).replace(/\s+/g, ' ').trim() : '~unknown';
+    al.artistKey = key;
+    if (!artists.has(key)) artists.set(key, { key, name: al.artist || 'Artista sconosciuto', names: {}, albums: [], img: null, count: 0 });
+    const ar = artists.get(key); ar.albums.push(al.key);
+    if (al.artist) ar.names[al.artist] = (ar.names[al.artist] || 0) + 1;
+  }
+  for (const ar of artists.values()) {
+    const ns = Object.keys(ar.names).sort((x, y) => (/[a-z]/.test(y) - /[a-z]/.test(x)) || ar.names[y] - ar.names[x]);
+    if (ns.length) ar.name = ns[0];
+  }
+  for (const al of albums.values()) {
+    al.artistName = artists.get(al.artistKey).name;
+    al.tracks = [];
+    for (const f of al.files) {
+      const c = imageCue.get(f.lower);
+      const cue = c && CUES[c.lower] && CUES[c.lower].r === c.rev ? CUES[c.lower] : null;
+      if (cue && cue.tr && cue.tr.length > 1) {
+        cue.tr.forEach((ct, i) => {
+          const lower = f.lower + '#' + ct.n;
+          tracks.set(lower, { lower, file: f.lower, path: f.disp, name: f.name, size: f.size, rev: f.rev, albumKey: al.key, disc: f.disc,
+            num: ct.n, numLabel: String(ct.n), fileTitle: ct.t || 'Traccia ' + ct.n, performer: ct.p || '', start: ct.s, end: i + 1 < cue.tr.length ? cue.tr[i + 1].s : null, ext: f.ext });
+          al.tracks.push(lower);
+        });
+      } else {
+        const fp = parseTrackName(f.name, al.artist);
+        tracks.set(f.lower, { lower: f.lower, file: f.lower, path: f.disp, name: f.name, size: f.size, rev: f.rev, albumKey: al.key, disc: f.disc,
+          num: fp.num, numLabel: fp.label, fileTitle: fp.title, ext: f.ext, start: null, end: null, cuePending: c && !cue ? { path: c.lower, rev: c.rev } : null });
+        al.tracks.push(f.lower);
+      }
+    }
+    artists.get(al.artistKey).count += al.tracks.length;
+  }
+  for (const e of entries) if (IMG_EXT.includes(e.ext)) {
+    const folders = e.segs.slice(0, -1);
+    let placed = false;
+    for (let d = folders.length; d >= 1 && !placed; d--) {
+      const al = albums.get('/' + folders.slice(0, d).join('/').toLowerCase());
+      if (!al) continue;
+      placed = true;
+      const sc = coverScore(e.name, folders.length - d);
+      if (sc >= 0 && (sc > al.imgScore || (sc === al.imgScore && e.name.length < al.imgLen))) { al.img = e.lower; al.imgScore = sc; al.imgLen = e.name.length; }
+    }
+    if (!placed && folders.length === 1) {
+      const sc = coverScore(e.name, 0), k = folders[0].toLowerCase(), prev = artistFolderImg.get(k);
+      if (sc >= 0 && (!prev || sc > prev.sc)) artistFolderImg.set(k, { lower: e.lower, sc });
+    }
+  }
+  for (const ar of artists.values()) {
+    ar.albums.sort((x, y) => { const a = albums.get(x), b = albums.get(y); return (a.year || '9999').localeCompare(b.year || '9999') || natural(a.title, b.title); });
+    const first = albums.get(ar.albums[0]);
+    const fimg = first && first.artistFolder ? artistFolderImg.get(first.artistFolder.toLowerCase()) : null;
+    ar.img = fimg ? fimg.lower : null;
+    if (!ar.img) { const w = ar.albums.map(k => albums.get(k)).find(a => a.img); if (w) ar.img = w.img; }
+  }
+  return { artists, albums, tracks };
+}
+function parseCue(text) {
+  const out = { a: '', t: '', y: '', tr: [], files: 0 }; let cur = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim(); let m;
+    if ((m = line.match(/^TRACK\s+(\d+)\s+AUDIO/i))) { cur = { n: parseInt(m[1], 10), t: '', p: '', s: null }; out.tr.push(cur); }
+    else if ((m = line.match(/^TITLE\s+"?(.*?)"?\s*$/i))) { if (cur) cur.t = m[1]; else out.t = m[1]; }
+    else if ((m = line.match(/^PERFORMER\s+"?(.*?)"?\s*$/i))) { if (cur) cur.p = m[1]; else out.a = m[1]; }
+    else if ((m = line.match(/^REM\s+DATE\s+"?(\d{4})/i))) out.y = m[1];
+    else if ((m = line.match(/^INDEX\s+01\s+(\d+):(\d+):(\d+)/i)) && cur) cur.s = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + parseInt(m[3], 10) / 75;
+    else if (/^FILE\s/i.test(line)) out.files++;
+  }
+  out.tr = out.tr.filter(x => x.s != null);
+  return out;
+}
 
 /* ---------------- utilità ---------------- */
 const $ = id => document.getElementById(id);
@@ -222,10 +446,6 @@ function ic(name, size = 24, sw = 2) {
 }
 function fmtTime(s) { if (!isFinite(s) || s < 0) s = 0; s = Math.floor(s); const m = Math.floor(s / 60); return m + ':' + String(s % 60).padStart(2, '0'); }
 function fmtLong(s) { const m = Math.max(1, Math.round(s / 60)); return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`; }
-function ext(n) { const i = n.lastIndexOf('.'); return i < 0 ? '' : n.slice(i + 1).toLowerCase(); }
-function baseName(n) { const i = n.lastIndexOf('.'); return i < 0 ? n : n.slice(0, i); }
-const natural = (a, b) => a.localeCompare(b, 'it', { numeric: true, sensitivity: 'base' });
-const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 function colorFor(s) { let x = 0; for (const ch of s || '') x = (x * 31 + ch.charCodeAt(0)) >>> 0; return PALETTE[x % PALETTE.length]; }
 function initial(s) { const m = (s || '?').match(/[\p{L}\p{N}]/u); return m ? m[0].toUpperCase() : '♪'; }
 function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
@@ -324,57 +544,17 @@ async function logout() {
   NAV = [{ v: 'lib' }]; render();
 }
 
-/* ---------------- indice della libreria ---------------- */
+/* ---------------- indice e libreria ---------------- */
 let IDX = loadJSON(K.index) || { files: {}, cursor: null, at: 0 };
+let AMETA = loadJSON(K.ameta) || {};    // album -> artista/titolo/anno letti da tag o .cue
+let CUES = loadJSON(K.cues) || {};      // file .cue già letti
+let TAGS = loadJSON(K.tags) || {};      // file -> tag FLAC
 let LIB = { artists: new Map(), albums: new Map(), tracks: new Map() };
-let syncing = false, syncCount = 0;
+let syncing = false, syncCount = 0, enriching = false, enrichDone = 0, enrichTotal = 0;
+function buildLib() { LIB = buildLibCore(IDX.files, AMETA, CUES); }
+let saveTimers = {};
+function saveSoon(key, getter) { clearTimeout(saveTimers[key]); saveTimers[key] = setTimeout(() => { if (!saveJSON(key, getter())) log('Memoria del browser piena: ' + key); }, 800); }
 
-function parseAlbumName(n) {
-  let m = n.match(/^(\d{4})\s*[-–._)]\s*(.+)$/); if (m) return { year: m[1], title: m[2] };
-  m = n.match(/^(.+?)\s*[\(\[](\d{4})[\)\]]\s*$/); if (m) return { year: m[2], title: m[1] };
-  return { year: '', title: n };
-}
-function parseTrackName(n) {
-  const b = baseName(n);
-  const m = b.match(/^(?:\d{1,2}[-.](?=\d))?(\d{1,3})(?!\d)(?:\s*[-.)_]\s*|\s+)(.+)$/);
-  return m ? { num: parseInt(m[1], 10), title: m[2].trim() } : { num: null, title: b };
-}
-function buildLib() {
-  const artists = new Map(), albums = new Map(), tracks = new Map(), imgs = [];
-  for (const [lower, f] of Object.entries(IDX.files)) {
-    const disp = f[0], segs = disp.split('/').slice(1), name = segs[segs.length - 1], e = ext(name);
-    let artistKey, artistName, albumKey, albumName, disc = '';
-    if (segs.length === 1) { artistKey = '~varie'; artistName = 'Varie'; albumKey = '~root'; albumName = 'Cartella principale'; }
-    else if (segs.length === 2) { artistKey = '/' + segs[0].toLowerCase(); artistName = segs[0]; albumKey = artistKey + '/~sciolti'; albumName = 'Brani sciolti'; }
-    else { artistKey = '/' + segs[0].toLowerCase(); artistName = segs[0]; albumKey = artistKey + '/' + segs[1].toLowerCase(); albumName = segs[1]; disc = segs.slice(2, -1).join(' / '); }
-    if (IMG_EXT.includes(e)) { imgs.push({ lower, name, depth: segs.length, artistKey, albumKey }); continue; }
-    if (!AUDIO_EXT.includes(e)) continue;
-    if (!artists.has(artistKey)) artists.set(artistKey, { key: artistKey, name: artistName, albums: [], img: null, imgPri: 9, count: 0 });
-    if (!albums.has(albumKey)) {
-      const p = parseAlbumName(albumName);
-      albums.set(albumKey, { key: albumKey, title: p.title, year: p.year, artistKey, artistName, tracks: [], img: null, imgPri: 9, imgLen: 999 });
-      artists.get(artistKey).albums.push(albumKey);
-    }
-    const fp = parseTrackName(name);
-    tracks.set(lower, { lower, path: disp, name, size: f[1], rev: f[2], albumKey, artistKey, disc, num: fp.num, fileTitle: fp.title, ext: e });
-    albums.get(albumKey).tracks.push(lower);
-    artists.get(artistKey).count++;
-  }
-  for (const im of imgs) {
-    const pri = /^(cover|folder|front|album|copertina)\./i.test(im.name) ? 0 : 1;
-    if (im.depth === 2 && artists.has(im.artistKey)) {
-      const a = artists.get(im.artistKey); if (pri < a.imgPri) { a.img = im.lower; a.imgPri = pri; }
-    }
-    const al = albums.get(im.albumKey);
-    if (al && (pri < al.imgPri || (pri === al.imgPri && im.name.length < al.imgLen))) { al.img = im.lower; al.imgPri = pri; al.imgLen = im.name.length; }
-  }
-  for (const al of albums.values()) al.tracks.sort((x, y) => { const a = tracks.get(x), b = tracks.get(y); return natural(a.disc, b.disc) || natural(a.name, b.name); });
-  for (const ar of artists.values()) {
-    ar.albums.sort((x, y) => { const a = albums.get(x), b = albums.get(y); return (a.year || '9999').localeCompare(b.year || '9999') || natural(a.title, b.title); });
-    if (!ar.img) { const withImg = ar.albums.map(k => albums.get(k)).find(a => a.img); if (withImg) ar.img = withImg.img; }
-  }
-  LIB = { artists, albums, tracks };
-}
 async function syncIndex(full = false) {
   if (syncing || !linked()) return;
   syncing = true; syncCount = 0; refreshSyncUI();
@@ -393,8 +573,7 @@ async function syncIndex(full = false) {
       for (const en of res.entries) {
         const tag = en['.tag'];
         if (tag === 'file') {
-          const e = ext(en.name);
-          if (AUDIO_EXT.includes(e) || IMG_EXT.includes(e)) { IDX.files[en.path_lower] = [en.path_display, en.size, en.rev]; changed = true; }
+          if (INDEX_EXT.includes(ext(en.name))) { IDX.files[en.path_lower] = [en.path_display, en.size, en.rev]; changed = true; }
         } else if (tag === 'deleted') {
           const p = en.path_lower;
           for (const k of Object.keys(IDX.files)) if (k === p || k.startsWith(p + '/')) { delete IDX.files[k]; changed = true; }
@@ -406,7 +585,7 @@ async function syncIndex(full = false) {
     }
     IDX.cursor = res.cursor; IDX.at = Date.now();
     if (!saveJSON(K.index, IDX)) log('Indice troppo grande per la memoria del browser: verrà riletto a ogni avvio');
-    if (changed) { buildLib(); log(`Libreria aggiornata: ${LIB.tracks.size} brani`); }
+    if (changed) { buildLib(); log(`Libreria aggiornata: ${LIB.albums.size} album, ${LIB.tracks.size} brani`); }
   } catch (e) {
     if (e instanceof NeedLogin) { bootError = 'Sessione Dropbox scaduta: ricollega Dropbox.'; syncing = false; render(); return; }
     log('Aggiornamento libreria non riuscito: ' + e.message);
@@ -414,25 +593,30 @@ async function syncIndex(full = false) {
   } finally {
     syncing = false;
   }
-  if (changed) {
-    restoreResumeIfNeeded();
-    if (NAV[NAV.length - 1].v === 'search') { const b = $('searchResults'); if (b) fillSearch(b); refreshSyncUI(); } else render();
-  } else refreshSyncUI();
+  if (changed) { restoreResumeIfNeeded(); refreshViews(); } else refreshSyncUI();
+  enrichAlbums();
 }
 function refreshSyncUI() { const s = $('syncState'); if (s) s.replaceChildren(...syncStateNodes()); }
 function syncStateNodes() {
   if (syncing) return [h('span', { class: 'spin' }), syncCount ? `Lettura libreria… ${syncCount.toLocaleString('it-IT')} elementi` : 'Lettura libreria…'];
+  if (enriching) return [h('span', { class: 'spin' }), `Riconoscimento album ${enrichDone}/${enrichTotal}`];
   return [];
 }
-
-/* ---------------- tag FLAC (titolo, artista, durata, qualità, copertina) ---------------- */
-let TAGS = loadJSON(K.tags) || {};
-let tagsDirty = false, tagsTimer = null;
-function saveTagsSoon() {
-  tagsDirty = true; clearTimeout(tagsTimer);
-  tagsTimer = setTimeout(() => { if (!saveJSON(K.tags, TAGS)) { TAGS = {}; saveJSON(K.tags, TAGS); } tagsDirty = false; }, 800);
+function refreshViews() {
+  const cur = NAV[NAV.length - 1];
+  if (cur.v === 'search') { const b = $('searchResults'); if (b) fillSearch(b); refreshSyncUI(); }
+  else { const y = window.scrollY; render(); window.scrollTo(0, y); }
+  if (curTrack()) updateNowPlaying();
 }
-const embeddedArt = new Map();      // albumKey -> blob: URL
+let regroupTimer = null, lastRegroup = 0;
+function scheduleRegroup() {
+  clearTimeout(regroupTimer);
+  const wait = Math.max(300, 3000 - (Date.now() - lastRegroup));
+  regroupTimer = setTimeout(() => { lastRegroup = Date.now(); buildLib(); restoreResumeIfNeeded(); refreshViews(); }, wait);
+}
+
+/* ---------------- tag FLAC, .cue e riconoscimento degli album ---------------- */
+const embeddedArt = new Map();      // album -> blob: URL
 const noPic = new Set();            // album già controllati senza copertina incorporata
 async function readFlacMeta(path, wantPic) {
   let win = { base: 0, bytes: new Uint8Array(0) }, fetches = 0;
@@ -462,7 +646,7 @@ async function readFlacMeta(path, wantPic) {
       const b0 = B(pos + 10), b1 = B(pos + 11), b2 = B(pos + 12), b3 = B(pos + 13);
       const sr = (b0 << 12) | (b1 << 4) | (b2 >> 4);
       const total = (b3 & 0x0f) * 4294967296 + B(pos + 14) * 16777216 + (B(pos + 15) << 16) + (B(pos + 16) << 8) + B(pos + 17);
-      out.sr = sr; out.c = ((b2 >> 1) & 7) + 1; out.b = (((b2 & 1) << 4) | (b3 >> 4)) + 1; out.d = sr ? Math.round(total / sr) : 0;
+      out.sr = sr; out.c = ((b2 >> 1) & 7) + 1; out.b = (((b2 & 1) << 4) | (b3 >> 4)) + 1; out.d = sr ? total / sr : 0;
     } else if (type === 4 && len < 1048576) {
       await need(pos, len);
       const dv = new DataView(win.bytes.buffer, win.bytes.byteOffset + (pos - win.base), len);
@@ -475,8 +659,9 @@ async function readFlacMeta(path, wantPic) {
         const key = s.slice(0, eq).toUpperCase(), val = s.slice(eq + 1).trim();
         if (key === 'TITLE' && !out.t) out.t = val;
         else if (key === 'ARTIST' && !out.a) out.a = val;
+        else if ((key === 'ALBUMARTIST' || key === 'ALBUM ARTIST') && !out.aa) out.aa = val;
         else if (key === 'ALBUM' && !out.al) out.al = val;
-        else if ((key === 'DATE' || key === 'YEAR') && !out.y) { const m = val.match(/\d{4}/); if (m) out.y = m[0]; }
+        else if ((key === 'DATE' || key === 'YEAR' || key === 'ORIGINALDATE') && !out.y) { const m = val.match(/\d{4}/); if (m) out.y = m[0]; }
         else if (key === 'TRACKNUMBER' && !out.n) { const m = val.match(/\d+/); if (m) out.n = parseInt(m[0], 10); }
       }
       out.vc = 1;
@@ -494,15 +679,66 @@ async function readFlacMeta(path, wantPic) {
   }
   return out;
 }
+async function loadCue(path, rev) {
+  if (CUES[path] && CUES[path].r === rev) return CUES[path];
+  const bytes = await readRange(path, 0, 262144);
+  let text;
+  if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) text = new TextDecoder('utf-8').decode(bytes.subarray(3));
+  else { try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (e) { text = new TextDecoder('windows-1252').decode(bytes); } }
+  const c = parseCue(text); c.r = rev;
+  if (c.files > 1) c.tr = [];     // un file per brano: non è un album in file unico
+  CUES[path] = c; saveSoon(K.cues, () => CUES);
+  return c;
+}
+const tagOf = t => { const g = TAGS[t.file]; return g && g.r === t.rev ? g : null; };
+function storeTags(t, m) { TAGS[t.file] = { r: t.rev, t: m.t, a: m.a, aa: m.aa, al: m.al, y: m.y, n: m.n, d: m.d, sr: m.sr, b: m.b, c: m.c }; saveSoon(K.tags, () => TAGS); }
+function albumMetaFromTags(al, file, m) {
+  const src = al && al.metaSrc;
+  if (!src || src.kind !== 'flac' || src.path !== file) return false;
+  if (AMETA[al.key] && AMETA[al.key].r === src.rev) return false;
+  AMETA[al.key] = { r: src.rev, a: m.aa || cleanArtist(m.a || ''), t: m.al || '', y: m.y || '' };
+  saveSoon(K.ameta, () => AMETA);
+  return true;
+}
+// In sottofondo: per ogni album legge un solo .cue o l'inizio di un FLAC (64 KB) per conoscere artista, titolo e anno
+async function enrichAlbums() {
+  if (enriching || !linked()) return;
+  const todo = [...LIB.albums.values()].filter(al => al.metaSrc && !(AMETA[al.key] && AMETA[al.key].r === al.metaSrc.rev));
+  if (!todo.length) return;
+  enriching = true; enrichDone = 0; enrichTotal = todo.length; refreshSyncUI();
+  let i = 0;
+  const worker = async () => {
+    while (i < todo.length) {
+      const al = todo[i++], src = al.metaSrc;
+      try {
+        if (src.kind === 'cue') { const c = await loadCue(src.path, src.rev); AMETA[al.key] = { r: src.rev, a: c.a, t: c.t, y: c.y }; saveSoon(K.ameta, () => AMETA); }
+        else {
+          const t = LIB.tracks.get(src.path) || { file: src.path, rev: src.rev };
+          const m = await readFlacMeta(src.path, false); storeTags(t, m); albumMetaFromTags(al, src.path, m);
+        }
+      } catch (e) {
+        if (e instanceof NeedLogin) break;
+        AMETA[al.key] = { r: src.rev }; saveSoon(K.ameta, () => AMETA);
+        log(`Riconoscimento non riuscito per «${al.folder}»: ${e.message}`);
+      }
+      enrichDone++; refreshSyncUI(); scheduleRegroup();
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  enriching = false; refreshSyncUI(); scheduleRegroup();
+}
 const tagJobs = new Map();
 function trackInfo(t) {
-  const tg = TAGS[t.lower];
-  const g = tg && tg.r === t.rev ? tg : null;
-  const ar = LIB.artists.get(t.artistKey);
+  const g = tagOf(t), al = LIB.albums.get(t.albumKey);
+  const virtual = t.start != null;
+  const albumArtist = al && al.key !== '~root' ? al.artistName : '';
+  let dur = 0;
+  if (virtual) { const end = t.end != null ? t.end : (g && g.d) || 0; dur = end > t.start ? end - t.start : 0; }
+  else dur = g && g.d ? g.d : 0;
   return {
-    title: (g && g.t) || t.fileTitle,
-    artist: (g && g.a) || (t.artistKey === '~varie' ? '' : ar ? ar.name : ''),
-    dur: g && g.d ? g.d : 0,
+    title: virtual ? t.fileTitle : ((g && g.t) || t.fileTitle),
+    artist: (virtual ? t.performer : (g && g.a)) || albumArtist,
+    dur,
     quality: g && g.sr ? `${t.ext.toUpperCase()} ${g.b}/${String(+(g.sr / 1000).toFixed(1))}` : '',
     year: g && g.y || '',
   };
@@ -510,26 +746,36 @@ function trackInfo(t) {
 async function loadAlbumTags(albumKey) {
   if (tagJobs.has(albumKey)) return tagJobs.get(albumKey);
   const job = (async () => {
-    const al = LIB.albums.get(albumKey); if (!al) return;
-    const todo = al.tracks.map(k => LIB.tracks.get(k)).filter(t => t && t.ext === 'flac' && !(TAGS[t.lower] && TAGS[t.lower].r === t.rev));
+    let al = LIB.albums.get(albumKey); if (!al) return;
+    // 1) album in un file unico: leggo il .cue per ricavare i brani
+    const pend = [...new Map(al.tracks.map(k => LIB.tracks.get(k)).filter(t => t && t.cuePending).map(t => [t.cuePending.path, t.cuePending])).values()];
+    if (pend.length) {
+      for (const c of pend) { try { await loadCue(c.path, c.rev); } catch (e) { log('.cue non letto: ' + e.message); } }
+      buildLib(); refreshViews(); al = LIB.albums.get(albumKey); if (!al) return;
+    }
+    // 2) tag dei FLAC (una sola lettura per file, anche se il file contiene più brani)
+    const files = [], seen = new Set();
+    for (const k of al.tracks) { const t = LIB.tracks.get(k); if (!t || t.ext !== 'flac' || seen.has(t.file)) continue; seen.add(t.file); files.push(t); }
     let wantPic = !al.img && !embeddedArt.has(albumKey) && !noPic.has(albumKey);
-    const first = al.tracks.map(k => LIB.tracks.get(k)).find(t => t.ext === 'flac');
+    const todo = files.filter(t => !tagOf(t));
+    const first = files[0];
     if (wantPic && first && !todo.includes(first)) todo.unshift(first);
-    let i = 0;
+    let metaChanged = false, i = 0;
     const worker = async () => {
       while (i < todo.length) {
         const t = todo[i++]; const pic = wantPic && t === first;
         try {
-          const m = await readFlacMeta(t.lower, pic);
-          TAGS[t.lower] = { r: t.rev, t: m.t, a: m.a, al: m.al, y: m.y, n: m.n, d: m.d, sr: m.sr, b: m.b, c: m.c };
-          saveTagsSoon();
+          const m = await readFlacMeta(t.file, pic);
+          storeTags(t, m);
+          if (albumMetaFromTags(al, t.file, m)) metaChanged = true;
           if (m.pic) { setEmbeddedArt(albumKey, m.pic); wantPic = false; }
-          updateTrackRow(t.lower);
+          updateRowsForFile(t.file);
         } catch (e) { log(`Tag non letti per «${t.name}»: ${e.message}`); }
       }
     };
     await Promise.all([worker(), worker(), worker()]);
     if (wantPic) noPic.add(albumKey);
+    if (metaChanged) scheduleRegroup();
     updateAlbumHeader(albumKey);
     if (curTrack() && curTrack().albumKey === albumKey) updateNowPlaying();
   })();
@@ -598,17 +844,30 @@ async function tempLink(path) {
   return j.link;
 }
 async function prefetchLinks(paths) {
-  const todo = paths.filter(p => !freshLink(p)); let i = 0;
+  const todo = [...new Set(paths)].filter(p => p && !freshLink(p)); let i = 0;
   const worker = async () => { while (i < todo.length) { const p = todo[i++]; try { await tempLink(p); } catch (e) {} } };
   await Promise.all([worker(), worker(), worker()]);
 }
 
 /* ---------------- coda e riproduzione ---------------- */
+// Un brano può essere un file intero oppure una porzione (start/end) di un album in file unico con .cue
 const audio = $('audio');
 let Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' };
-let pendingSeek = 0, pendingAuto = null, announced = null, lastSave = 0;
+let pendingSeek = 0, pendingAuto = null, announced = null, lastSave = 0, loadedFile = null;
 const retried = new Set();
-function curTrack() { return Q.pos >= 0 && Q.pos < Q.order.length ? LIB.tracks.get(Q.items[Q.order[Q.pos]]) : null; }
+function curTrack() { return Q.pos >= 0 && Q.pos < Q.order.length ? LIB.tracks.get(Q.items[Q.order[Q.pos]]) || null : null; }
+const fileOf = t => t.file || t.lower;
+const trackStart = t => (t && t.start != null ? t.start : 0);
+function trackEnd(t) {
+  if (!t) return null;
+  if (t.end != null) return t.end;
+  if (loadedFile === fileOf(t) && isFinite(audio.duration) && audio.duration > 0) return audio.duration;
+  const g = tagOf(t); return g && g.d ? g.d : null;
+}
+function absNow() { return audio.readyState > 0 ? audio.currentTime : (pendingSeek || 0); }
+function relTime() { return Math.max(0, absNow() - trackStart(curTrack())); }
+function relDur() { const t = curTrack(); if (!t) return 0; const e = trackEnd(t); return e ? e - trackStart(t) : trackInfo(t).dur; }
+function seekAbs(x) { if (audio.readyState > 0) audio.currentTime = x; else pendingSeek = x; }
 function doPlay() {
   const p = audio.play();
   if (p && p.catch) p.catch(e => { log(`play() rifiutato: ${e.name}`); if (e.name === 'NotAllowedError' && !isHidden()) toast('Tocca ▶ per avviare'); setPP(); });
@@ -622,35 +881,46 @@ function playQueue(items, startIdx, shuffle = Q.shuffle) {
   pendingAuto = null;
   loadAndPlay(Q.pos, 0, true);
 }
-function loadAndPlay(pos, startAt = 0, autoplay = true) {
+function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
   Q.pos = pos; const t = curTrack(); if (!t) return;
   announced = null;
-  const go = l => { audio.preload = autoplay ? 'auto' : 'metadata'; audio.src = l; pendingSeek = startAt; if (autoplay) doPlay(); };
-  const link = freshLink(t.lower);
-  if (link) go(link);    // percorso sincrono: indispensabile per iOS a schermo spento
-  else tempLink(t.lower).then(l => { if (curTrack() === t) go(l); }).catch(e => { log('Link non disponibile: ' + e.message); toast('Brano non raggiungibile'); });
+  const f = fileOf(t), target = trackStart(t) + startAt;
+  if (!force && loadedFile === f && audio.getAttribute('src')) {
+    seekAbs(target);                         // stesso file (album con .cue): basta spostarsi
+    if (autoplay && audio.paused) doPlay();
+  } else {
+    const go = l => { audio.preload = autoplay ? 'auto' : 'metadata'; audio.src = l; loadedFile = f; pendingSeek = target; if (autoplay) doPlay(); };
+    const link = freshLink(f);
+    if (link) go(link);    // percorso sincrono: indispensabile per iOS a schermo spento
+    else tempLink(f).then(l => { if (curTrack() === t) go(l); }).catch(e => { log('Link non disponibile: ' + e.message); toast('Brano non raggiungibile'); });
+  }
   updateNowPlaying(); ensureAhead(); saveResume(true);
-  if (t.ext === 'flac' && !(TAGS[t.lower] && TAGS[t.lower].r === t.rev)) loadAlbumTags(t.albumKey);
+  if (t.ext === 'flac' && !tagOf(t)) loadAlbumTags(t.albumKey);
 }
 function ensureAhead() {
   const ahead = [];
-  for (let k = 1; k <= 2; k++) { let p = Q.pos + k; if (p >= Q.order.length) { if (Q.repeat !== 'all') break; p %= Q.order.length; } ahead.push(Q.items[Q.order[p]]); }
+  for (let k = 1; k <= 2; k++) {
+    let p = Q.pos + k;
+    if (p >= Q.order.length) { if (Q.repeat !== 'all') break; p %= Q.order.length; }
+    const t = LIB.tracks.get(Q.items[Q.order[p]]); if (t) ahead.push(fileOf(t));
+  }
   prefetchLinks(ahead);
 }
-function nextIndex(auto) {
-  if (Q.pos + 1 < Q.order.length) return Q.pos + 1;
-  return Q.repeat === 'all' ? 0 : -1;
-}
-function next() { pendingAuto = null; const n = nextIndex(false); if (n >= 0) loadAndPlay(n); }
+function nextIndex() { if (Q.pos + 1 < Q.order.length) return Q.pos + 1; return Q.repeat === 'all' ? 0 : -1; }
+function next() { pendingAuto = null; const n = nextIndex(); if (n >= 0) loadAndPlay(n); }
 function prev() {
   pendingAuto = null;
-  if (audio.currentTime > 3 || Q.pos <= 0) { audio.currentTime = 0; return; }
+  if (relTime() > 3 || Q.pos <= 0) { seekAbs(trackStart(curTrack())); updateProgress(); return; }
   loadAndPlay(Q.pos - 1);
 }
-function seekBy(d) { if (!curTrack() || !isFinite(audio.duration)) return; audio.currentTime = Math.max(0, Math.min(audio.duration - 0.5, audio.currentTime + d)); updateProgress(); updatePosition(); }
+function seekBy(d) {
+  const t = curTrack(); if (!t) return;
+  const s = trackStart(t), e = trackEnd(t); if (!e) return;
+  seekAbs(Math.max(s, Math.min(e - 0.5, absNow() + d))); updateProgress(); updatePosition();
+}
 function togglePlay() {
   if (!curTrack()) return;
-  if (audio.paused) { if (!audio.getAttribute('src')) loadAndPlay(Q.pos, pendingSeek || 0, true); else doPlay(); }
+  if (audio.paused) { if (!audio.getAttribute('src')) loadAndPlay(Q.pos, relTime(), true, true); else doPlay(); }
   else audio.pause();
 }
 function toggleShuffle() {
@@ -666,26 +936,44 @@ function cycleRepeat() {
   updateModes(); ensureAhead(); saveResume(true);
   toast(Q.repeat === 'all' ? 'Ripeti tutta la coda' : Q.repeat === 'one' ? 'Ripeti il brano' : 'Ripetizione disattivata');
 }
-function stopPlayback() { audio.pause(); audio.removeAttribute('src'); audio.load(); Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' }; store(K.resume, null); updateNowPlaying(); }
+function stopPlayback() { audio.pause(); audio.removeAttribute('src'); audio.load(); loadedFile = null; Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' }; store(K.resume, null); updateNowPlaying(); }
+function announce() {
+  const t = curTrack(); if (!t || announced === t.lower) return;
+  announced = t.lower; log(`▶ ${trackInfo(t).title}`); updateMediaSession();
+}
+// fine di un brano dentro un file unico (.cue)
+function onVirtualEnd(t) {
+  if (Q.repeat === 'one') { seekAbs(trackStart(t)); return; }
+  const n = nextIndex();
+  if (n < 0) { audio.pause(); log('Fine della coda'); setPP(); saveResume(true); return; }
+  const nt = LIB.tracks.get(Q.items[Q.order[n]]);
+  if (nt && fileOf(nt) === fileOf(t) && Math.abs(trackStart(nt) - t.end) < 0.5) {
+    Q.pos = n; announced = null; announce(); updateNowPlaying(); ensureAhead(); saveResume(true);   // continua senza interruzioni
+  } else { if (isHidden()) pendingAuto = Date.now(); loadAndPlay(n); }
+}
 
-audio.addEventListener('loadedmetadata', () => { if (pendingSeek > 0 && isFinite(audio.duration)) { audio.currentTime = Math.min(pendingSeek, audio.duration - 1); } pendingSeek = 0; updateProgress(); updatePosition(); });
+audio.addEventListener('loadedmetadata', () => { if (pendingSeek > 0 && isFinite(audio.duration)) audio.currentTime = Math.min(pendingSeek, audio.duration - 1); pendingSeek = 0; updateProgress(); updatePosition(); });
 audio.addEventListener('playing', () => {
   setPP();
-  const t = curTrack(); if (!t) return;
+  if (!curTrack()) return;
   if (pendingAuto) {
     const dt = ((Date.now() - pendingAuto) / 1000).toFixed(1);
     log(isHidden() ? `✓ Passaggio automatico a schermo spento (${dt} s)` : `✗ Il brano successivo è partito solo allo sblocco (${dt} s)`);
     pendingAuto = null;
   }
-  if (announced !== t.lower) { announced = t.lower; log(`▶ ${trackInfo(t).title}`); }
-  ensureAhead(); updateMediaSession();
+  announce(); ensureAhead();
 });
 audio.addEventListener('pause', () => { setPP(); saveResume(true); });
-audio.addEventListener('timeupdate', () => { updateProgress(); if (Date.now() - lastSave > 5000) saveResume(); });
+audio.addEventListener('timeupdate', () => {
+  const t = curTrack();
+  if (t && t.end != null && !seeking && audio.currentTime >= t.end - 0.12) onVirtualEnd(t);
+  updateProgress(); if (Date.now() - lastSave > 5000) saveResume();
+});
 audio.addEventListener('waiting', () => { if (isHidden() && Date.now() - lastWaitLog > 10000) { lastWaitLog = Date.now(); log('In attesa di dati (rete lenta?)'); } });
 audio.addEventListener('ended', () => {
-  if (Q.repeat === 'one') { audio.currentTime = 0; doPlay(); return; }
-  const n = nextIndex(true);
+  const t = curTrack();
+  if (Q.repeat === 'one') { seekAbs(trackStart(t)); doPlay(); return; }
+  const n = nextIndex();
   if (n < 0) { log('Fine della coda'); setPP(); saveResume(true); return; }
   if (isHidden()) pendingAuto = Date.now();
   loadAndPlay(n);
@@ -695,9 +983,9 @@ audio.addEventListener('error', () => {
   const t = curTrack(); const code = audio.error ? audio.error.code : 0;
   const why = { 1: 'interrotto', 2: 'errore di rete', 3: 'errore di decodifica', 4: 'formato non supportato o link scaduto' }[code] || 'sconosciuto';
   log(`Errore sul brano «${t ? t.name : '?'}»: ${why}`);
-  if (t && !retried.has(t.lower)) { retried.add(t.lower); linkCache.delete(t.lower); loadAndPlay(Q.pos, audio.currentTime || 0, true); return; }
+  if (t && !retried.has(fileOf(t))) { retried.add(fileOf(t)); linkCache.delete(fileOf(t)); loadAndPlay(Q.pos, relTime(), true, true); return; }
   toast('Brano non riproducibile: passo al successivo');
-  const n = nextIndex(true); if (n >= 0 && n !== Q.pos) loadAndPlay(n);
+  const n = nextIndex(); if (n >= 0 && n !== Q.pos) loadAndPlay(n, 0, true, true);
 });
 document.addEventListener('visibilitychange', () => {
   if (isHidden()) saveResume(true);
@@ -709,24 +997,25 @@ function saveResume(force) {
   if (!force && audio.paused) return;
   lastSave = Date.now();
   if (!curTrack()) return;
-  saveJSON(K.resume, { items: Q.items, order: Q.order, pos: Q.pos, t: Math.floor(audio.currentTime || pendingSeek || 0), shuffle: Q.shuffle, repeat: Q.repeat });
+  saveJSON(K.resume, { items: Q.items, order: Q.order, pos: Q.pos, t: Math.floor(relTime()), shuffle: Q.shuffle, repeat: Q.repeat });
 }
 let resumed = false;
 function restoreResumeIfNeeded() {
   if (resumed || curTrack() || !LIB.tracks.size) return;
-  resumed = true;
-  const r = loadJSON(K.resume); if (!r || !r.items || !r.items.length) return;
+  const r = loadJSON(K.resume); if (!r || !r.items || !r.items.length) { resumed = true; return; }
   let items = r.items, order = r.order, pos = r.pos;
   const curPath = items[order[pos]];
+  if (!LIB.tracks.has(curPath) && Object.keys(IDX.files).some(k => curPath.startsWith(k + '#'))) return;   // brani .cue non ancora letti: riprovo dopo
+  resumed = true;
   if (!items.every(p => LIB.tracks.has(p))) {
     items = items.filter(p => LIB.tracks.has(p)); if (!items.length) return;
     order = [...Array(items.length).keys()]; pos = Math.max(0, items.indexOf(curPath));
   }
   Q = { items, order, pos, shuffle: !!r.shuffle && order.length === items.length, repeat: r.repeat || 'off' };
-  pendingSeek = r.t || 0;
-  updateNowPlaying(); updateModes();
   const t = curTrack();
-  tempLink(t.lower).then(l => { if (curTrack() === t && !audio.getAttribute('src')) { audio.preload = 'metadata'; audio.src = l; pendingSeek = r.t || 0; } }).catch(() => {});
+  pendingSeek = trackStart(t) + (r.t || 0);
+  updateNowPlaying(); updateModes();
+  tempLink(fileOf(t)).then(l => { if (curTrack() === t && !audio.getAttribute('src')) { audio.preload = 'metadata'; audio.src = l; loadedFile = fileOf(t); pendingSeek = trackStart(t) + (r.t || 0); } }).catch(() => {});
   log(`Ripresa: «${trackInfo(t).title}» da ${fmtTime(r.t || 0)}`);
 }
 
@@ -738,7 +1027,7 @@ function setupMediaSession() {
   hd('pause', () => audio.pause());
   hd('previoustrack', prev);
   hd('nexttrack', next);
-  hd('seekto', d => { audio.currentTime = d.seekTime; updatePosition(); });
+  hd('seekto', d => { seekAbs(trackStart(curTrack()) + d.seekTime); updatePosition(); });
   hd('seekbackward', null);   // senza questi due iOS mostra ±10 s al posto di ⏮ ⏭
   hd('seekforward', null);
 }
@@ -754,8 +1043,9 @@ function updateMediaSession() {
   setupMediaSession(); updatePosition();
 }
 function updatePosition() {
-  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState || !isFinite(audio.duration) || audio.duration <= 0) return;
-  try { navigator.mediaSession.setPositionState({ duration: audio.duration, playbackRate: audio.playbackRate || 1, position: Math.min(audio.currentTime, audio.duration) }); } catch (e) {}
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const d = relDur(); if (!d || !isFinite(d)) return;
+  try { navigator.mediaSession.setPositionState({ duration: d, playbackRate: audio.playbackRate || 1, position: Math.min(relTime(), d) }); } catch (e) {}
 }
 
 /* ---------------- mini-lettore e lettore a tutto schermo ---------------- */
@@ -790,8 +1080,7 @@ function updateNowPlaying() {
   if (al && !al.img && !embeddedArt.has(al.key) && !noPic.has(al.key) && !tagJobs.has(al.key)) loadAlbumTags(al.key);
 }
 function updateProgress() {
-  const d = audio.duration, c = audio.currentTime || pendingSeek || 0;
-  const dur = isFinite(d) && d > 0 ? d : (curTrack() ? trackInfo(curTrack()).dur : 0);
+  const c = relTime(), dur = relDur();
   const pct = dur ? Math.min(100, c / dur * 100) : 0;
   $('miniProg').style.width = pct + '%';
   if (!seeking) { $('pSeek').value = Math.round(pct * 10); $('pSeek').style.setProperty('--p', pct + '%'); $('pCur').textContent = fmtTime(c); }
@@ -827,14 +1116,17 @@ window.addEventListener('popstate', () => {
   if (playerOpen) { closePlayer(true); return; }
   if (NAV.length > 1) { NAV.pop(); render(); window.scrollTo(0, NAV[NAV.length - 1].y || 0); }
 });
-function backBtn() { return h('button', { class: 'back', onclick: () => history.back(), html: ic('left', 24) + `<span></span>` }); }
-function withBackLabel(btn, label) { btn.querySelector('span').textContent = label; btn.setAttribute('aria-label', 'Indietro: ' + label); return btn; }
+function backBtnLabeled(label) {
+  const b = h('button', { class: 'back', onclick: () => history.back(), html: ic('left', 24) + '<span></span>', 'aria-label': 'Indietro: ' + label });
+  b.querySelector('span').textContent = label;
+  return b;
+}
 
 /* ---------------- viste ---------------- */
 function render() {
   const view = $('view'); const cur = NAV[NAV.length - 1];
   const nodes = [];
-  if (bootError) { nodes.push(h('div', { class: 'err' }, bootError)); }
+  if (bootError) nodes.push(h('div', { class: 'err' }, bootError));
   const hasKey = !!load(K.appKey);
   $('bottom').classList.toggle('hidden', !hasKey || !linked());
   if (!hasKey) nodes.push(...viewSetup());
@@ -845,10 +1137,8 @@ function render() {
   else if (cur.v === 'search') nodes.push(...viewSearch());
   else if (cur.v === 'settings') nodes.push(...viewSettings());
   view.replaceChildren(...nodes);
-  document.querySelectorAll('.tab').forEach(b => {
-    const root = ({ artist: 'lib', album: 'lib' })[NAV[0].v] || NAV[0].v;
-    b.classList.toggle('on', b.dataset.tab === root); b.setAttribute('aria-current', b.dataset.tab === root ? 'page' : 'false');
-  });
+  const root = ({ artist: 'lib', album: 'lib' })[NAV[0].v] || NAV[0].v;
+  document.querySelectorAll('.tab').forEach(b => { b.classList.toggle('on', b.dataset.tab === root); b.setAttribute('aria-current', b.dataset.tab === root ? 'page' : 'false'); });
 }
 function viewSetup() {
   const input = h('input', { class: 'field', id: 'appKeyInput', type: 'text', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', placeholder: 'es. a1b2c3d4e5f6g7h', 'aria-label': 'App key' });
@@ -868,9 +1158,10 @@ function viewLogin() {
     h('div', { class: 'box' }, h('h2', null, 'Collega Dropbox'), h('p', null, 'L\'app chiede solo di leggere la propria cartella: il resto del tuo Dropbox resta invisibile.'),
       h('div', { class: 'btnrow' }, h('button', { class: 'btn', onclick: () => startLogin() }, 'Collega Dropbox'), h('button', { class: 'btn sec', onclick: () => { store(K.appKey, null); render(); } }, 'Cambia App key')))];
 }
+const lastKeys = new Set(['~unknown', 'a:varie']);
 function viewLib() {
-  const artists = [...LIB.artists.values()].sort((a, b) => (a.key === '~varie') - (b.key === '~varie') || natural(a.name, b.name));
-  const albums = [...LIB.albums.values()].sort((a, b) => natural(a.artistName, b.artistName) || (a.year || '').localeCompare(b.year || '') || natural(a.title, b.title));
+  const artists = [...LIB.artists.values()].sort((a, b) => lastKeys.has(a.key) - lastKeys.has(b.key) || natural(a.name.replace(/^the\s+/i, ''), b.name.replace(/^the\s+/i, '')));
+  const albums = [...LIB.albums.values()].sort((a, b) => natural(a.artistName.replace(/^the\s+/i, ''), b.artistName.replace(/^the\s+/i, '')) || (a.year || '').localeCompare(b.year || '') || natural(a.title, b.title));
   const chip = (id, label) => h('button', { class: 'chip' + (LIBTAB === id ? ' on' : ''), 'aria-pressed': LIBTAB === id ? 'true' : 'false', onclick: () => { LIBTAB = id; store(K.libTab, id); render(); } }, label);
   const nodes = [
     h('div', { class: 'between' }, h('h1', null, 'Libreria'), h('button', { class: 'ibtn', 'aria-label': 'Cerca nella libreria', html: ic('search', 24), onclick: () => goTab('search') })),
@@ -878,7 +1169,7 @@ function viewLib() {
     h('div', { class: 'between small mut' }, h('span', null, LIBTAB === 'artisti' ? plural(artists.length, 'artista', 'artisti') : plural(albums.length, 'album', 'album')), h('span', { id: 'syncState' }, ...syncStateNodes())),
   ];
   if (!LIB.tracks.size) {
-    nodes.push(h('div', { class: 'empty' }, syncing ? 'Sto leggendo la libreria…' : 'La cartella dell\'app è vuota. In Dropbox copia la musica dentro Applicazioni › [nome della tua app], organizzata come Artista › Album › brani.'));
+    nodes.push(h('div', { class: 'empty' }, syncing ? 'Sto leggendo la libreria…' : 'La cartella dell\'app è vuota. In Dropbox copia le cartelle degli album dentro Applicazioni › [nome della tua app].'));
     if (!syncing) nodes.push(h('button', { class: 'btn', onclick: () => syncIndex() }, 'Aggiorna'));
     return nodes;
   }
@@ -897,9 +1188,9 @@ function albumCard(al, showArtist) {
     h('span', { class: 'txt' }, h('span', { class: 't1', style: 'font-size:15px' }, al.title), h('span', { class: 't2' }, [showArtist ? al.artistName : '', al.year].filter(Boolean).join(' · ') || plural(al.tracks.length, 'brano', 'brani'))));
 }
 function viewArtist(key) {
-  const a = LIB.artists.get(key); if (!a) return [backBtnLabeled('Libreria'), h('div', { class: 'empty' }, 'Artista non trovato.')];
+  const a = LIB.artists.get(key); if (!a) return [backBtnLabeled('Libreria'), h('div', { class: 'empty' }, 'Questo artista non è più nella libreria: probabilmente è stato riconosciuto con un altro nome.')];
   const all = a.albums.flatMap(k => LIB.albums.get(k).tracks);
-  const firsts = a.albums.map(k => LIB.albums.get(k).tracks[0]); prefetchLinks(firsts.slice(0, 12));
+  prefetchLinks(a.albums.map(k => LIB.albums.get(k).tracks[0]).filter(Boolean).slice(0, 12).map(k => fileOf(LIB.tracks.get(k))));
   return [backBtnLabeled('Libreria'),
     h('h1', { style: 'margin-top:6px' }, a.name),
     h('div', { class: 'small mut', style: 'margin-top:6px' }, `${plural(a.albums.length, 'album', 'album')} · ${plural(a.count, 'brano', 'brani')}`),
@@ -909,7 +1200,6 @@ function viewArtist(key) {
     h('div', { class: 'sec-h' }, 'Album'),
     h('div', { class: 'grid' }, ...a.albums.map(k => albumCard(LIB.albums.get(k), false)))];
 }
-function backBtnLabeled(label) { return withBackLabel(backBtn(), label); }
 function albumMeta(al) {
   const infos = al.tracks.map(k => trackInfo(LIB.tracks.get(k)));
   const year = al.year || (infos.find(i => i.year) || {}).year || '';
@@ -930,12 +1220,12 @@ function viewAlbum(key) {
     if (discs.size > 1 && t.disc !== lastDisc) { lastDisc = t.disc; rows.push(h('div', { class: 'disc' }, t.disc || 'Altri brani')); }
     rows.push(trackRow(t, i, () => playQueue(al.tracks, i)));
   });
-  prefetchLinks(al.tracks.slice(0, 12));
+  prefetchLinks(al.tracks.slice(0, 12).map(k => fileOf(LIB.tracks.get(k))));
   setTimeout(() => loadAlbumTags(key), 0);
   return [backBtnLabeled(backLabel),
     h('div', { style: 'display:flex;justify-content:center;margin-top:6px' }, albumArt(al, 'w640h480', '', 'width:min(260px,70vw);aspect-ratio:1/1;border-radius:4px;font-size:72px')),
     h('h1', { style: 'margin-top:20px;font-size:26px' }, al.title),
-    al.artistKey === '~varie' ? null : h('button', { style: 'margin-top:4px;font-size:15px;font-weight:600', onclick: () => go({ v: 'artist', key: al.artistKey }) }, al.artistName),
+    h('button', { style: 'margin-top:4px;font-size:15px;font-weight:600', onclick: () => go({ v: 'artist', key: al.artistKey }) }, al.artistName),
     h('div', { id: 'albumMeta', class: 'small mut', style: 'display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap' }, h('span', null, meta.text), meta.quality ? h('span', { class: 'badge' }, meta.quality) : null),
     h('div', { class: 'btns' },
       h('button', { class: 'pill primary', html: ic('play', 18) + 'Riproduci', onclick: () => playQueue(al.tracks, 0, false) }),
@@ -945,17 +1235,17 @@ function viewAlbum(key) {
 function trackRow(t, i, onclick, sub) {
   const info = trackInfo(t);
   const now = curTrack() && curTrack().lower === t.lower;
+  const label = t.numLabel || String(i + 1);
   const row = h('button', { class: 'track' + (now ? ' now' : ''), 'data-lower': t.lower, onclick },
-    h('span', { class: 'n', html: now ? ic('eq', 16) : '' }, now ? null : String(t.num || i + 1)),
+    h('span', { class: 'n', html: now ? ic('eq', 16) : '' }, now ? null : label),
     h('span', { class: 'tt' }, h('span', null, info.title), sub ? h('span', { class: 't2' }, sub) : null),
     h('span', { class: 'd' }, info.dur ? fmtTime(info.dur) : ''));
-  row.dataset.num = String(t.num || i + 1);
+  row.dataset.num = label;
   return row;
 }
-function updateTrackRow(lower) {
-  const t = LIB.tracks.get(lower); if (!t) return;
+function updateRowsForFile(file) {
   document.querySelectorAll('.track[data-lower]').forEach(r => {
-    if (r.dataset.lower !== lower) return;
+    const t = LIB.tracks.get(r.dataset.lower); if (!t || t.file !== file) return;
     const info = trackInfo(t);
     r.querySelector('.tt span').textContent = info.title;
     r.querySelector('.d').textContent = info.dur ? fmtTime(info.dur) : '';
@@ -963,7 +1253,7 @@ function updateTrackRow(lower) {
 }
 function updateAlbumHeader(key) {
   const cur = NAV[NAV.length - 1]; const box = $('albumMeta');
-  if (!box || cur.v !== 'album' || cur.key !== key) return;
+  if (!box || cur.v !== 'album' || cur.key !== key || !LIB.albums.get(key)) return;
   const meta = albumMeta(LIB.albums.get(key));
   box.replaceChildren(h('span', null, meta.text), meta.quality ? h('span', { class: 'badge' }, meta.quality) : null);
 }
@@ -1017,11 +1307,11 @@ function viewSettings() {
     h('div', { class: 'box' }, h('h2', null, 'Dropbox'), h('p', null, 'Collegato. L\'app legge solo la propria cartella (Applicazioni › nome dell\'app), in sola lettura.'),
       h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: () => { if (confirm('Scollegare Dropbox da questo dispositivo?')) logout(); } }, 'Scollega Dropbox'))),
     h('div', { class: 'box' }, h('h2', null, 'Libreria'), h('p', null, `${plural(nArt, 'artista', 'artisti')} · ${plural(nAlb, 'album', 'album')} · ${plural(nTr, 'brano', 'brani')}`), h('p', null, `Ultimo aggiornamento: ${when}`),
-      h('div', { class: 'btnrow' }, h('button', { class: 'btn', onclick: () => syncIndex() }, 'Aggiorna'), h('button', { class: 'btn sec', onclick: () => { TAGS = {}; store(K.tags, null); embeddedArt.clear(); syncIndex(true); } }, 'Ricostruisci da zero'))),
-    h('div', { class: 'box' }, h('h2', null, 'Come organizzare le cartelle'),
-      h('p', null, 'Applicazioni › [nome dell\'app] › Artista › Album › brani. Gli album con più dischi possono avere sottocartelle (es. CD1, CD2).'),
-      h('p', null, 'Copertina: un\'immagine nella cartella dell\'album (preferibilmente cover.jpg o folder.jpg); in mancanza, quella incorporata nei FLAC.'),
-      h('p', null, 'Il titolo dell\'album può iniziare con l\'anno: «2019 - Titolo».')),
+      h('div', { class: 'btnrow' }, h('button', { class: 'btn', onclick: () => syncIndex() }, 'Aggiorna'),
+        h('button', { class: 'btn sec', onclick: () => { TAGS = {}; AMETA = {}; CUES = {}; [K.tags, K.ameta, K.cues].forEach(k => store(k, null)); embeddedArt.clear(); noPic.clear(); syncIndex(true); } }, 'Ricostruisci da zero'))),
+    h('div', { class: 'box' }, h('h2', null, 'Come copiare la musica'),
+      h('p', null, 'Copia le cartelle degli album così come sono dentro Applicazioni › [nome dell\'app]. L\'app ricava artista, album e anno dal nome della cartella («Artista - Album (2011) [FLAC 16-44]», «1983 - Artista - Album», …) e poi li corregge con i dati contenuti nei FLAC.'),
+      h('p', null, 'Funzionano anche: cartelle Artista › Album, dischi multipli (CD1, Disc 2), album in un unico FLAC con file .cue, copertine in sottocartelle (Artwork, Covers, Scans).')),
     h('div', { class: 'box' }, h('details', null, h('summary', null, 'Diagnostica'),
       h('p', null, `v${VERSION} · FLAC: ${flac ? 'supportato' : 'non supportato'} · aperta ${isStandalone() ? 'dalla schermata Home' : 'nel browser'} · comandi schermata di blocco: ${'mediaSession' in navigator ? 'sì' : 'no'}`),
       logBox,
@@ -1048,15 +1338,12 @@ $('pNext').innerHTML = ic('next', 32); $('pNext').addEventListener('click', next
 $('pPP').addEventListener('click', togglePlay);
 $('pShuffle').innerHTML = ic('shuffle', 22); $('pShuffle').addEventListener('click', toggleShuffle);
 $('pRepeat').innerHTML = ic('repeat', 22); $('pRepeat').addEventListener('click', cycleRepeat);
-$('pArtist').addEventListener('click', () => { const t = curTrack(); if (!t || t.artistKey === '~varie') return; closePlayer(); setTimeout(() => go({ v: 'artist', key: t.artistKey }), 50); });
+$('pArtist').addEventListener('click', () => { const t = curTrack(); if (!t) return; const al = LIB.albums.get(t.albumKey); if (!al) return; closePlayer(); setTimeout(() => go({ v: 'artist', key: al.artistKey }), 50); });
 const seek = $('pSeek');
-seek.addEventListener('input', () => {
-  seeking = true; const d = audio.duration || (curTrack() ? trackInfo(curTrack()).dur : 0);
-  seek.style.setProperty('--p', seek.value / 10 + '%'); $('pCur').textContent = fmtTime(seek.value / 1000 * d);
-});
+seek.addEventListener('input', () => { seeking = true; seek.style.setProperty('--p', seek.value / 10 + '%'); $('pCur').textContent = fmtTime(seek.value / 1000 * relDur()); });
 seek.addEventListener('change', () => {
-  if (isFinite(audio.duration) && audio.duration > 0) audio.currentTime = seek.value / 1000 * audio.duration;
-  else if (curTrack()) pendingSeek = seek.value / 1000 * trackInfo(curTrack()).dur;
+  const t = curTrack();
+  if (t) seekAbs(trackStart(t) + seek.value / 1000 * relDur());
   seeking = false; updateProgress(); updatePosition();
 });
 setPP(); updateModes(); setupMediaSession();
@@ -1067,10 +1354,7 @@ setPP(); updateModes(); setupMediaSession();
   try { await handleRedirect(); } catch (e) { bootError = 'Errore nel collegamento: ' + e.message; }
   buildLib();
   render();
-  if (linked()) {
-    restoreResumeIfNeeded();
-    await syncIndex();
-  }
+  if (linked()) { restoreResumeIfNeeded(); await syncIndex(); }
 })();
 </script>
 </body>
