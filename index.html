@@ -176,7 +176,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.6';
+const VERSION = '1.7';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -921,7 +921,7 @@ function relTime() { return Math.max(0, absNow() - trackStart(curTrack())); }
 function relDur() { const t = curTrack(); if (!t) return 0; const e = trackEnd(t); return e ? e - trackStart(t) : trackInfo(t).dur; }
 function seekAbs(x) { if (audio.readyState > 0) audio.currentTime = x; else pendingSeek = x; }
 // con l'equalizzatore il file va richiesto in modalità CORS, altrimenti Web Audio produce silenzio
-function setSrc(l) { if (ac || EQ.on) audio.crossOrigin = 'anonymous'; else audio.removeAttribute('crossorigin'); audio.src = l; }
+function setSrc(l) { srcPlayingAt = 0; if (ac || EQ.on) audio.crossOrigin = 'anonymous'; else audio.removeAttribute('crossorigin'); audio.src = l; }
 function doPlay() {
   eqWake();
   const p = audio.play();
@@ -936,13 +936,16 @@ function playQueue(items, startIdx, shuffle = Q.shuffle) {
   pendingAuto = null;
   loadAndPlay(Q.pos, 0, true);
 }
-/* ---------------- precarico del brano successivo ----------------
-   Circa un minuto prima della fine scarico in memoria il file del brano successivo, identico all'originale:
-   al cambio il lettore lo legge da lì, senza aspettare la rete. Nulla viene salvato: la memoria si libera subito dopo. */
-const PRE_LEAD = 75;                    // secondi prima della fine
+/* ---------------- precarico ----------------
+   - aprendo un album (con la musica ferma) scarico in memoria il primo brano;
+   - mentre un brano suona, dopo 5 s scarico in memoria tutto il brano successivo (sempre uno avanti).
+   I file sono identici agli originali; nulla viene salvato e la memoria si libera al cambio di brano.
+   Si scarica il file intero: un pezzo iniziale non sarebbe utilizzabile, il lettore non può unirlo allo streaming. */
+let PRE_DELAY = 5000;                   // lascio partire lo streaming prima di dividere la rete
+let srcPlayingAt = 0;                   // quando il file attuale ha iniziato a suonare
 const PRE_MAX = 150 * 1024 * 1024;      // oltre questa dimensione resta lo streaming
 const MIME = { flac: 'audio/flac', mp3: 'audio/mpeg', m4a: 'audio/mp4', alac: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', aif: 'audio/aiff', aiff: 'audio/aiff', ogg: 'audio/ogg', opus: 'audio/ogg', caf: 'audio/x-caf' };
-let PRE = null;                         // { file, ctrl, url, ready, t0 }
+let PRE = null;                         // { file, kind, album, ctrl, url, ready, t0 }
 let curBlob = null;                     // { file, url } file in memoria usato ora dal lettore
 const noPre = new Set();                // file che dalla memoria non si aprono: solo streaming
 let lastPreCheck = 0;
@@ -961,12 +964,24 @@ function maybePreload() {
   const nt = preloadOn() ? nextTrack() : null, nf = nt ? fileOf(nt) : null;
   if (PRE && PRE.file !== nf) dropPre();                       // coda cambiata o precarico spento
   if (!nt || PRE || !linked() || nf === fileOf(t) || noPre.has(nf) || (curBlob && curBlob.file === nf)) return;
-  const left = relDur() - relTime(); if (!(left <= PRE_LEAD)) return;
+  if (!curBlob && (!srcPlayingAt || Date.now() - srcPlayingAt < PRE_DELAY)) return;
   const size = fileSize(nf); if (!size || size > PRE_MAX) return;
-  startPreload(nt, nf, size);
+  startPreload(nt, nf, 'successivo');
 }
-async function startPreload(nt, nf, size) {
-  const p = PRE = { file: nf, ctrl: new AbortController(), url: null, ready: false, t0: performance.now() };
+// Album aperto con la musica ferma: preparo il primo brano, così "Riproduci" parte dalla memoria
+function preloadForAlbum(al) {
+  if (!al || !preloadOn() || !linked() || !audio.paused) return;
+  const t = LIB.tracks.get(al.tracks[0]); if (!t) return;
+  const f = fileOf(t);
+  if ((PRE && PRE.file === f) || (curBlob && curBlob.file === f) || noPre.has(f)) return;
+  const size = fileSize(f); if (!size || size > PRE_MAX) return;
+  dropPre(); startPreload(t, f, 'album', al.key);
+}
+function leftAlbumView(cur) {      // uscendo dall'album interrompo un download non finito, per non consumare dati
+  if (PRE && PRE.kind === 'album' && !PRE.ready && !(cur.v === 'album' && cur.key === PRE.album)) dropPre();
+}
+async function startPreload(nt, nf, kind, album) {
+  const p = PRE = { file: nf, kind, album, ctrl: new AbortController(), url: null, ready: false, t0: performance.now() };
   try {
     let r;
     for (let i = 0; i < 2; i++) {
@@ -980,7 +995,7 @@ async function startPreload(nt, nf, size) {
     if (PRE !== p) return;
     p.url = URL.createObjectURL(new Blob([raw], { type: MIME[nt.ext] || 'application/octet-stream' }));
     p.ready = true; p.ctrl = null;
-    log(`⬇ Precaricato «${trackInfo(nt).title}» · ${mb(raw.size)} in ${((performance.now() - p.t0) / 1000).toFixed(1)} s`);
+    log(`⬇ Precaricato «${trackInfo(nt).title}»${kind === 'album' ? ' (primo brano dell\'album)' : ''} · ${mb(raw.size)} in ${((performance.now() - p.t0) / 1000).toFixed(1)} s`);
   } catch (e) {
     if (PRE === p) { PRE = null; if (e.name !== 'AbortError') { log('Precarico non riuscito: ' + e.message); noPre.add(nf); } }
   }
@@ -1033,7 +1048,7 @@ function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
       PRE = null; if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'memoria' };
       go(pre.url, { file: f, url: pre.url });
     } else {
-      if (pre) { if (isHidden() || autoplay) log('Precarico non finito in tempo: streaming'); dropPre(); }
+      if (pre) { if (autoplay) log(`Precarico non ancora finito: parto in streaming`); dropPre(); }
       const link = freshLink(f);
       if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'streaming', link: link ? 'pronto' : 'nuovo' };
       if (link) go(link);    // percorso sincrono: indispensabile per iOS a schermo spento
@@ -1105,6 +1120,7 @@ function bindAudio(el) {
   on('playing', () => {
     setPP();
     if (!curTrack()) return;
+    if (!srcPlayingAt) srcPlayingAt = Date.now();
     measureStarted(curTrack());
     if (pendingAuto) {
       const dt = ((Date.now() - pendingAuto) / 1000).toFixed(1);
@@ -1336,7 +1352,7 @@ function preloadBox() {
     box.replaceChildren(h('div', { class: 'eq' },
       h('div', { class: 'between' }, h('strong', null, 'Precarica il brano successivo'),
         h('button', { class: 'btn' + (on ? ' sec' : ''), onclick: () => { store(K.preload, on ? 'off' : null); if (on) dropPre(); log('Precarico ' + (on ? 'disattivato' : 'attivato')); draw(); } }, on ? 'Disattiva' : 'Attiva')),
-      h('p', { class: 'small mut' }, 'Circa un minuto prima della fine scarica in memoria il brano successivo, identico all\'originale: il passaggio è quasi immediato e il salto dentro il brano è istantaneo. Niente viene salvato sul telefono. Se salti il brano, quei dati sono consumati comunque (circa 25 MB per un brano in qualità CD): con i dati mobili puoi disattivarlo. File oltre 150 MB restano in streaming.')));
+      h('p', { class: 'small mut' }, 'Quando apri un album scarica in memoria il primo brano; mentre ascolti, dopo 5 secondi scarica il successivo. I file sono identici agli originali: il passaggio è quasi immediato e il salto dentro il brano è istantaneo. Niente viene salvato sul telefono. I brani che salti consumano comunque i dati già scaricati (in 24/96 circa 20 MB al minuto di musica): con i dati mobili puoi disattivarlo. File oltre 150 MB restano in streaming.')));
   };
   draw(); return box;
 }
@@ -1451,6 +1467,7 @@ function render() {
   else if (cur.v === 'search') nodes.push(...viewSearch());
   else if (cur.v === 'settings') nodes.push(...viewSettings());
   view.replaceChildren(...nodes);
+  leftAlbumView(cur);
   const root = ({ artist: 'lib', album: 'lib' })[NAV[0].v] || NAV[0].v;
   document.querySelectorAll('.tab').forEach(b => { b.classList.toggle('on', b.dataset.tab === root); b.setAttribute('aria-current', b.dataset.tab === root ? 'page' : 'false'); });
 }
@@ -1533,7 +1550,7 @@ function viewAlbum(key) {
     rows.push(trackRow(t, i, () => playQueue(al.tracks, i)));
   });
   prefetchLinks(al.tracks.map(k => fileOf(LIB.tracks.get(k))).slice(0, 150));
-  setTimeout(() => loadAlbumTags(key), 0);
+  setTimeout(() => { loadAlbumTags(key); preloadForAlbum(al); }, 0);
   return [backBtnLabeled(backLabel),
     h('div', { style: 'display:flex;justify-content:center;margin-top:6px' }, albumArt(al, 'w640h480', '', 'width:min(260px,70vw);aspect-ratio:1/1;border-radius:4px;font-size:72px')),
     h('h1', { style: 'margin-top:20px;font-size:26px' }, al.title),
