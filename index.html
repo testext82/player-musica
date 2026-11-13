@@ -176,7 +176,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.4';
+const VERSION = '1.4.1';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -879,6 +879,7 @@ async function prefetchLinks(paths) {
 // Un brano può essere un file intero oppure una porzione (start/end) di un album in file unico con .cue
 let audio = $('audio');      // può essere sostituito da un elemento nuovo quando si spegne l'equalizzatore
 let Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' };
+let actBy = null, pausedLogged = false;   // chi ha messo in pausa / fatto ripartire (per il registro)
 let pendingSeek = 0, pendingAuto = null, announced = null, lastSave = 0, loadedFile = null;
 const retried = new Set();
 function curTrack() { return Q.pos >= 0 && Q.pos < Q.order.length ? LIB.tracks.get(Q.items[Q.order[Q.pos]]) || null : null; }
@@ -949,6 +950,7 @@ function seekBy(d) {
 }
 function togglePlay() {
   if (!curTrack()) return;
+  if (!actBy) actBy = 'tasto del lettore';
   if (audio.paused) { if (!audio.getAttribute('src')) loadAndPlay(Q.pos, relTime(), true, true); else doPlay(); }
   else audio.pause();
 }
@@ -974,7 +976,7 @@ function announce() {
 function onVirtualEnd(t) {
   if (Q.repeat === 'one') { seekAbs(trackStart(t)); return; }
   const n = nextIndex();
-  if (n < 0) { audio.pause(); log('Fine della coda'); setPP(); saveResume(true); return; }
+  if (n < 0) { actBy = 'fine della coda'; audio.pause(); log('Fine della coda'); setPP(); saveResume(true); return; }
   const nt = LIB.tracks.get(Q.items[Q.order[n]]);
   if (nt && fileOf(nt) === fileOf(t) && Math.abs(trackStart(nt) - t.end) < 0.5) {
     Q.pos = n; announced = null; announce(); updateNowPlaying(); ensureAhead(); saveResume(true);   // continua senza interruzioni
@@ -994,7 +996,17 @@ function bindAudio(el) {
     }
     announce(); ensureAhead();
   });
-  on('pause', () => { setPP(); saveResume(true); });
+  on('pause', () => {
+    setPP(); saveResume(true);
+    if (audio.getAttribute('src') && audio.readyState > 0 && !audio.ended && actBy !== 'fine della coda') {
+      log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}`); pausedLogged = true;
+    }
+    actBy = null;
+  });
+  on('play', () => {
+    if (pausedLogged) { log(`▶ Riprende · ${actBy || 'iOS'}${isHidden() ? ' · schermo spento' : ''}`); pausedLogged = false; }
+    actBy = null;
+  });
   on('timeupdate', () => {
     const t = curTrack();
     if (t && t.end != null && !seeking && audio.currentTime >= t.end - 0.12) onVirtualEnd(t);
@@ -1003,6 +1015,7 @@ function bindAudio(el) {
   on('waiting', () => { if (isHidden() && Date.now() - lastWaitLog > 10000) { lastWaitLog = Date.now(); log('In attesa di dati (rete lenta?)'); } });
   on('ended', () => {
     const t = curTrack();
+    log(`■ Fine brano «${t ? trackInfo(t).title : '?'}»${isHidden() ? ' · schermo spento' : ''}`);
     if (Q.repeat === 'one') { seekAbs(trackStart(t)); doPlay(); return; }
     const n = nextIndex();
     if (n < 0) { log('Fine della coda'); setPP(); saveResume(true); return; }
@@ -1022,8 +1035,9 @@ function bindAudio(el) {
 }
 bindAudio(audio);
 document.addEventListener('visibilitychange', () => {
-  if (isHidden()) { saveResume(true); if (ac) log(`Schermo spento con equalizzatore: motore audio «${ac.state}»`); }
-  else if (ac && !audio.paused) eqWake();
+  const music = () => audio.paused ? 'musica in pausa' : 'musica in riproduzione';
+  if (isHidden()) { saveResume(true); if (ac) log(`Schermo spento con equalizzatore: motore audio «${ac.state}», ${music()}`); }
+  else if (ac) { log(`Schermo acceso: motore audio «${ac.state}», ${music()}`); if (!audio.paused) eqWake(); }
   if (!isHidden() && pendingAuto) setTimeout(() => { if (pendingAuto && audio.paused) { log('✗ A schermo spento la musica si è fermata a fine brano'); pendingAuto = null; } }, 2000);
 });
 
@@ -1058,8 +1072,8 @@ function restoreResumeIfNeeded() {
 function setupMediaSession() {
   if (!('mediaSession' in navigator)) return;
   const hd = (n, f) => { try { navigator.mediaSession.setActionHandler(n, f); } catch (e) {} };
-  hd('play', () => { if (audio.paused) togglePlay(); });
-  hd('pause', () => audio.pause());
+  hd('play', () => { actBy = 'schermata di blocco'; if (audio.paused) togglePlay(); });
+  hd('pause', () => { actBy = 'schermata di blocco'; audio.pause(); });
   hd('previoustrack', prev);
   hd('nexttrack', next);
   hd('seekto', d => { seekAbs(trackStart(curTrack()) + d.seekTime); updatePosition(); });
@@ -1171,14 +1185,14 @@ function eqPanel() {
     h('p', { class: 'small mut' }, 'Sperimentale. Se su iPhone la musica si ferma a schermo spento, disattivalo: il lettore torna subito normale.'));
   if (EQ.on) {
     const chips = h('div', { class: 'eqp' }, ...Object.entries(PRESETS).map(([k, [name, g]]) =>
-      h('button', { class: 'chip' + (EQ.preset === k ? ' on' : ''), 'aria-pressed': EQ.preset === k ? 'true' : 'false', onclick: () => { EQ.preset = k; EQ.gains = g.slice(); applyEq(); saveEq(); refreshEqUI(); } }, name)));
+      h('button', { class: 'chip' + (EQ.preset === k ? ' on' : ''), 'aria-pressed': EQ.preset === k ? 'true' : 'false', onclick: () => { EQ.preset = k; EQ.gains = g.slice(); applyEq(); saveEq(); refreshEqUI(); log('Preset: ' + name); } }, name)));
     if (EQ.preset === 'custom') chips.append(h('button', { class: 'chip on', 'aria-pressed': 'true' }, 'Personalizzato'));
     wrap.append(chips);
     BANDS.forEach((f, i) => {
       const val = h('span', null, (EQ.gains[i] > 0 ? '+' : '') + EQ.gains[i] + ' dB');
       const input = h('input', { type: 'range', min: '-12', max: '12', step: '1', value: String(EQ.gains[i]), 'aria-label': `Banda ${f >= 1000 ? f / 1000 + ' kHz' : f + ' Hz'}` });
       input.addEventListener('input', () => { EQ.gains[i] = parseInt(input.value, 10); EQ.preset = 'custom'; val.textContent = (EQ.gains[i] > 0 ? '+' : '') + EQ.gains[i] + ' dB'; applyEq(); });
-      input.addEventListener('change', () => { saveEq(); refreshEqUI(); });
+      input.addEventListener('change', () => { saveEq(); refreshEqUI(); log(`Preset personalizzato (${f >= 1000 ? f / 1000 + ' kHz' : f + ' Hz'}: ${EQ.gains[i]} dB)`); });
       wrap.append(h('label', { class: 'eqb' }, h('span', null, f >= 1000 ? f / 1000 + ' kHz' : f + ' Hz'), input, val));
     });
   }
