@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <!-- La pagina può comunicare solo con Dropbox: nessun altro server riceve dati -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; media-src https://*.dropboxusercontent.com; img-src data: blob: https://*.dropboxusercontent.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; media-src https://*.dropboxusercontent.com blob:; img-src data: blob: https://*.dropboxusercontent.com; base-uri 'none'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Musica">
@@ -176,7 +176,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.5';
+const VERSION = '1.6';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -185,7 +185,7 @@ const SCOPES = 'files.metadata.read files.content.read';
 const REDIRECT_URI = location.origin + location.pathname;
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
 const K = { appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
-            index: 'mx_index_v2', tags: 'mx_tags_v1', ameta: 'mx_ameta_v1', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume' };
+            index: 'mx_index_v2', tags: 'mx_tags_v1', ameta: 'mx_ameta_v1', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', preload: 'mx_preload' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
 
 /* ---------------- riconoscimento della libreria (funzioni pure) ---------------- */
@@ -936,6 +936,83 @@ function playQueue(items, startIdx, shuffle = Q.shuffle) {
   pendingAuto = null;
   loadAndPlay(Q.pos, 0, true);
 }
+/* ---------------- precarico del brano successivo ----------------
+   Circa un minuto prima della fine scarico in memoria il file del brano successivo, identico all'originale:
+   al cambio il lettore lo legge da lì, senza aspettare la rete. Nulla viene salvato: la memoria si libera subito dopo. */
+const PRE_LEAD = 75;                    // secondi prima della fine
+const PRE_MAX = 150 * 1024 * 1024;      // oltre questa dimensione resta lo streaming
+const MIME = { flac: 'audio/flac', mp3: 'audio/mpeg', m4a: 'audio/mp4', alac: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', aif: 'audio/aiff', aiff: 'audio/aiff', ogg: 'audio/ogg', opus: 'audio/ogg', caf: 'audio/x-caf' };
+let PRE = null;                         // { file, ctrl, url, ready, t0 }
+let curBlob = null;                     // { file, url } file in memoria usato ora dal lettore
+const noPre = new Set();                // file che dalla memoria non si aprono: solo streaming
+let lastPreCheck = 0;
+const preloadOn = () => load(K.preload) !== 'off';
+const fileSize = f => (IDX.files[f] && IDX.files[f][1]) || 0;
+const mb = n => (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+function nextTrack() { const n = nextIndex(); return n >= 0 && n !== Q.pos ? LIB.tracks.get(Q.items[Q.order[n]]) || null : null; }
+function dropPre() {
+  if (!PRE) return;
+  if (PRE.ctrl) { try { PRE.ctrl.abort(); } catch (e) {} }
+  if (PRE.url && !(curBlob && curBlob.url === PRE.url)) URL.revokeObjectURL(PRE.url);
+  PRE = null;
+}
+function maybePreload() {
+  const t = curTrack(); if (!t) return;
+  const nt = preloadOn() ? nextTrack() : null, nf = nt ? fileOf(nt) : null;
+  if (PRE && PRE.file !== nf) dropPre();                       // coda cambiata o precarico spento
+  if (!nt || PRE || !linked() || nf === fileOf(t) || noPre.has(nf) || (curBlob && curBlob.file === nf)) return;
+  const left = relDur() - relTime(); if (!(left <= PRE_LEAD)) return;
+  const size = fileSize(nf); if (!size || size > PRE_MAX) return;
+  startPreload(nt, nf, size);
+}
+async function startPreload(nt, nf, size) {
+  const p = PRE = { file: nf, ctrl: new AbortController(), url: null, ready: false, t0: performance.now() };
+  try {
+    let r;
+    for (let i = 0; i < 2; i++) {
+      const tok = await getToken();
+      r = await fetch(CONTENT + 'files/download', { method: 'POST', signal: p.ctrl.signal, headers: { 'Authorization': 'Bearer ' + tok, 'Dropbox-API-Arg': hdrJson({ path: nf }) } });
+      if (r.status === 401 && i === 0) { accessToken = null; continue; }
+      break;
+    }
+    if (!r.ok) throw new Error('download ' + r.status);
+    const raw = await r.blob();
+    if (PRE !== p) return;
+    p.url = URL.createObjectURL(new Blob([raw], { type: MIME[nt.ext] || 'application/octet-stream' }));
+    p.ready = true; p.ctrl = null;
+    log(`⬇ Precaricato «${trackInfo(nt).title}» · ${mb(raw.size)} in ${((performance.now() - p.t0) / 1000).toFixed(1)} s`);
+  } catch (e) {
+    if (PRE === p) { PRE = null; if (e.name !== 'AbortError') { log('Precarico non riuscito: ' + e.message); noPre.add(nf); } }
+  }
+}
+// Misura dell'avvio di ogni brano (per capire dove si perde tempo)
+let startMeas = null;                   // { file, t0, from, link, linkMs, metaMs }
+const HDR = new Map();                  // dimensione dell'intestazione FLAC (metadati + copertine) prima dell'audio
+async function flacHeaderSize(path) {
+  if (HDR.has(path)) return HDR.get(path);
+  let win = { base: 0, bytes: new Uint8Array(0) }, reads = 0;
+  const need = async (abs, len) => {
+    if (abs >= win.base && abs + len <= win.base + win.bytes.length) return;
+    if (++reads > 4) throw new Error('troppe letture');
+    win = { base: abs, bytes: await readRange(path, abs, 65536) };
+    if (win.bytes.length < len) throw new Error('file troncato');
+  };
+  const B = abs => win.bytes[abs - win.base];
+  await need(0, 14); let pos = 0;
+  if (B(0) === 0x49 && B(1) === 0x44 && B(2) === 0x33) pos = 10 + (((B(6) & 0x7f) << 21) | ((B(7) & 0x7f) << 14) | ((B(8) & 0x7f) << 7) | (B(9) & 0x7f));
+  pos += 4; let last = false, guard = 0;
+  while (!last && guard++ < 64) { await need(pos, 4); last = !!(B(pos) & 0x80); pos += 4 + ((B(pos + 1) << 16) | (B(pos + 2) << 8) | B(pos + 3)); }
+  HDR.set(path, pos); return pos;
+}
+function measureStarted(t) {
+  const m = startMeas; if (!m || m.file !== fileOf(t) || loadedFile !== m.file) return;
+  startMeas = null;
+  const total = (performance.now() - m.t0) / 1000, q = trackInfo(t).quality;
+  const det = m.from === 'memoria' ? 'dalla memoria' : `streaming (link ${m.link}${m.linkMs != null ? ' ' + (m.linkMs / 1000).toFixed(1) + ' s' : ''}${m.metaMs != null ? ' · metadati ' + (m.metaMs / 1000).toFixed(1) + ' s' : ''})`;
+  log(`⏱ Partito in ${total.toFixed(1)} s · ${det}${q ? ' · ' + q : ''}`);
+  if (m.from !== 'memoria' && t.ext === 'flac')
+    flacHeaderSize(m.file).then(hb => { if (hb >= 524288) log(`   ↳ prima dell'audio il file ha ${mb(hb)} di intestazione (copertina incorporata): rallenta la partenza`); }).catch(() => {});
+}
 function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
   Q.pos = pos; const t = curTrack(); if (!t) return;
   announced = null;
@@ -944,10 +1021,24 @@ function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
     seekAbs(target);                         // stesso file (album con .cue): basta spostarsi
     if (autoplay && audio.paused) doPlay();
   } else {
-    const go = l => { audio.preload = autoplay ? 'auto' : 'metadata'; setSrc(l); loadedFile = f; pendingSeek = target; if (autoplay) doPlay(); };
-    const link = freshLink(f);
-    if (link) go(link);    // percorso sincrono: indispensabile per iOS a schermo spento
-    else tempLink(f).then(l => { if (curTrack() === t) go(l); }).catch(e => { log('Link non disponibile: ' + e.message); toast('Brano non raggiungibile'); });
+    const go = (l, blob) => {
+      const old = curBlob;
+      audio.preload = autoplay ? 'auto' : 'metadata'; setSrc(l); loadedFile = f; pendingSeek = target;
+      curBlob = blob || null;
+      if (old && old.url !== l) URL.revokeObjectURL(old.url);       // libero la memoria del brano precedente
+      if (autoplay) doPlay();
+    };
+    const pre = PRE && PRE.file === f ? PRE : null;
+    if (pre && pre.ready && !noPre.has(f)) {          // dalla memoria: niente rete
+      PRE = null; if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'memoria' };
+      go(pre.url, { file: f, url: pre.url });
+    } else {
+      if (pre) { if (isHidden() || autoplay) log('Precarico non finito in tempo: streaming'); dropPre(); }
+      const link = freshLink(f);
+      if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'streaming', link: link ? 'pronto' : 'nuovo' };
+      if (link) go(link);    // percorso sincrono: indispensabile per iOS a schermo spento
+      else tempLink(f).then(l => { if (curTrack() === t) { if (startMeas && startMeas.file === f) startMeas.linkMs = performance.now() - startMeas.t0; go(l); } }).catch(e => { log('Link non disponibile: ' + e.message); toast('Brano non raggiungibile'); });
+    }
   }
   updateNowPlaying(); ensureAhead(); saveResume(true);
   if (t.ext === 'flac' && !tagOf(t)) loadAlbumTags(t.albumKey);
@@ -992,7 +1083,7 @@ function cycleRepeat() {
   updateModes(); ensureAhead(); saveResume(true);
   toast(Q.repeat === 'all' ? 'Ripeti tutta la coda' : Q.repeat === 'one' ? 'Ripeti il brano' : 'Ripetizione disattivata');
 }
-function stopPlayback() { audio.pause(); audio.removeAttribute('src'); audio.load(); loadedFile = null; Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' }; store(K.resume, null); updateNowPlaying(); }
+function stopPlayback() { dropPre(); if (curBlob) { URL.revokeObjectURL(curBlob.url); curBlob = null; } audio.pause(); audio.removeAttribute('src'); audio.load(); loadedFile = null; Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' }; store(K.resume, null); updateNowPlaying(); }
 function announce() {
   const t = curTrack(); if (!t || announced === t.lower) return;
   announced = t.lower; log(`▶ ${trackInfo(t).title}`); updateMediaSession();
@@ -1010,10 +1101,11 @@ function onVirtualEnd(t) {
 
 function bindAudio(el) {
   const on = (ev, fn) => el.addEventListener(ev, e => { if (el === audio) fn(e); });
-  on('loadedmetadata', () => { if (pendingSeek > 0 && isFinite(audio.duration)) audio.currentTime = Math.min(pendingSeek, audio.duration - 1); pendingSeek = 0; updateProgress(); updatePosition(); });
+  on('loadedmetadata', () => { if (startMeas && startMeas.metaMs == null && loadedFile === startMeas.file) startMeas.metaMs = performance.now() - startMeas.t0; if (pendingSeek > 0 && isFinite(audio.duration)) audio.currentTime = Math.min(pendingSeek, audio.duration - 1); pendingSeek = 0; updateProgress(); updatePosition(); });
   on('playing', () => {
     setPP();
     if (!curTrack()) return;
+    measureStarted(curTrack());
     if (pendingAuto) {
       const dt = ((Date.now() - pendingAuto) / 1000).toFixed(1);
       log(isHidden() ? `✓ Passaggio automatico a schermo spento (${dt} s)` : `✗ Il brano successivo è partito solo allo sblocco (${dt} s)`);
@@ -1038,6 +1130,7 @@ function bindAudio(el) {
     const t = curTrack();
     if (t && t.end != null && !seeking && audio.currentTime >= t.end - 0.12) onVirtualEnd(t);
     updateProgress(); if (Date.now() - lastSave > 5000) saveResume();
+    if (Date.now() - lastPreCheck > 2000) { lastPreCheck = Date.now(); maybePreload(); }
     if (isHidden() && t && Date.now() - lastBeat > 60000) {     // battito a schermo spento: dimostra che la musica sta andando avanti
       lastBeat = Date.now(); log(`… suona ${fmtTime(relTime())} / ${fmtTime(relDur())} «${trackInfo(t).title}»${ac ? ' · motore «' + ac.state + '»' : ''}`);
     }
@@ -1057,6 +1150,11 @@ function bindAudio(el) {
     const t = curTrack(); const code = audio.error ? audio.error.code : 0;
     const why = { 1: 'interrotto', 2: 'errore di rete', 3: 'errore di decodifica', 4: 'formato non supportato o link scaduto' }[code] || 'sconosciuto';
     log(`Errore sul brano «${t ? t.name : '?'}»: ${why}`);
+    if (audio.getAttribute('src').startsWith('blob:') && t) {
+      log('Il brano precaricato non si apre: passo allo streaming');
+      noPre.add(fileOf(t)); if (curBlob) { URL.revokeObjectURL(curBlob.url); curBlob = null; }
+      loadAndPlay(Q.pos, relTime(), true, true); return;
+    }
     if (audio.crossOrigin === 'anonymous' && t && retried.has(fileOf(t))) { eqFailed(); return; }
     if (t && !retried.has(fileOf(t))) { retried.add(fileOf(t)); linkCache.delete(fileOf(t)); loadAndPlay(Q.pos, relTime(), true, true); return; }
     toast('Brano non riproducibile: passo al successivo');
@@ -1230,6 +1328,17 @@ function eqPanel() {
     });
   }
   return wrap;
+}
+function preloadBox() {
+  const box = h('div', { class: 'box' });
+  const draw = () => {
+    const on = preloadOn();
+    box.replaceChildren(h('div', { class: 'eq' },
+      h('div', { class: 'between' }, h('strong', null, 'Precarica il brano successivo'),
+        h('button', { class: 'btn' + (on ? ' sec' : ''), onclick: () => { store(K.preload, on ? 'off' : null); if (on) dropPre(); log('Precarico ' + (on ? 'disattivato' : 'attivato')); draw(); } }, on ? 'Disattiva' : 'Attiva')),
+      h('p', { class: 'small mut' }, 'Circa un minuto prima della fine scarica in memoria il brano successivo, identico all\'originale: il passaggio è quasi immediato e il salto dentro il brano è istantaneo. Niente viene salvato sul telefono. Se salti il brano, quei dati sono consumati comunque (circa 25 MB per un brano in qualità CD): con i dati mobili puoi disattivarlo. File oltre 150 MB restano in streaming.')));
+  };
+  draw(); return box;
 }
 function autoResumeBox() {
   const box = h('div', { class: 'box' });
@@ -1512,6 +1621,7 @@ function viewSettings() {
         h('button', { class: 'btn sec', onclick: () => { TAGS = {}; AMETA = {}; CUES = {}; [K.tags, K.ameta, K.cues].forEach(k => store(k, null)); embeddedArt.clear(); noPic.clear(); syncIndex(true); } }, 'Ricostruisci da zero'))),
     h('div', { class: 'box', 'data-eq-host': '' }, eqPanel()),
     autoResumeBox(),
+    preloadBox(),
     h('div', { class: 'box' }, h('h2', null, 'Come copiare la musica'),
       h('p', null, 'Copia le cartelle degli album così come sono dentro Applicazioni › [nome dell\'app]. L\'app ricava artista, album e anno dal nome della cartella («Artista - Album (2011) [FLAC 16-44]», «1983 - Artista - Album», …) e poi li corregge con i dati contenuti nei FLAC.'),
       h('p', null, 'Funzionano anche: cartelle Artista › Album, dischi multipli (CD1, Disc 2), album in un unico FLAC con file .cue, copertine in sottocartelle (Artwork, Covers, Scans).')),

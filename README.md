@@ -5,7 +5,7 @@ Player web personale che ascolta in streaming FLAC e altri formati audio dalla *
 ## Privacy
 - Accesso Dropbox di tipo *App folder* e in sola lettura (`files.metadata.read`, `files.content.read`).
 - Login OAuth PKCE senza server: il permesso resta nel browser del dispositivo, nel codice non c'è nessun segreto.
-- La pagina può comunicare solo con Dropbox (Content-Security-Policy). Nessun font, script o servizio esterno.
+- La pagina può comunicare solo con Dropbox (Content-Security-Policy). Nessun font, script o servizio esterno. L'unica altra sorgente audio ammessa è `blob:`, cioè i brani precaricati in memoria.
 - I brani non vengono salvati: vengono letti in streaming tramite link temporanei di Dropbox.
 
 ## Organizzazione delle cartelle
@@ -22,7 +22,7 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.5)
+## Funzioni (v1.6)
 Libreria per artisti e album, ricerca, coda con riproduzione casuale e ripetizione, ±10 secondi,
 comandi sulla schermata di blocco (brano precedente/successivo), ripresa dal punto interrotto,
 aggiornamento incrementale della libreria, diagnostica in Impostazioni.
@@ -32,6 +32,11 @@ Equalizzatore sperimentale (spento di default): 10 bande da 31 Hz a 16 kHz e pre
 imposta la sessione audio di iOS su "playback", così Safari lo tratta come musica e non
 come suono di sottofondo. Spegnendolo il lettore torna subito normale, senza ricaricare la
 pagina. Se Dropbox non consente l'accesso richiesto, l'equalizzatore si spegne da solo.
+
+Precarico del brano successivo (attivo di default, disattivabile in Impostazioni): circa 75 secondi
+prima della fine il file del brano successivo viene scaricato in memoria, identico all'originale, e
+il passaggio non aspetta la rete. La memoria si libera al cambio di brano; nulla viene salvato sul
+dispositivo. I file oltre 150 MB restano in streaming. Il registro misura la partenza di ogni brano.
 
 Ripartenza automatica (attiva di default, disattivabile in Impostazioni): se iOS ferma la musica
 mentre è in sottofondo (microfono, Siri, chiamata), riparte quando l'interruzione finisce. Non
