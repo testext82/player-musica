@@ -37,8 +37,9 @@ ul.list li:first-child{border-top:0}
 li.now .name{color:var(--accent);font-weight:600}
 .player{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 16px calc(12px + env(safe-area-inset-bottom))}
 .title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ctrl{display:flex;justify-content:center;gap:18px;margin-top:4px}
+.ctrl{display:flex;justify-content:center;gap:10px;margin-top:4px}
 .ctrl button{width:56px;height:44px;padding:0;font-size:18px}
+.ctrl button.sec{font-size:15px;font-weight:600}
 input[type=range]{width:100%;margin:8px 0 2px}
 .times{display:flex;justify-content:space-between;color:var(--muted);font-size:12px}
 .log{font:12px/1.45 ui-monospace,Menlo,monospace;max-height:300px;overflow:auto;white-space:pre-wrap;background:var(--bg);border-radius:10px;padding:8px;margin-top:8px}
@@ -99,9 +100,11 @@ small{color:var(--muted);display:block}
   <input type="range" id="seek" min="0" max="1000" value="0" aria-label="Posizione nel brano">
   <div class="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
   <div class="ctrl">
+    <button class="sec" id="back10" aria-label="Indietro di 10 secondi">−10</button>
     <button id="prevBtn" aria-label="Brano precedente">⏮</button>
     <button id="ppBtn" aria-label="Riproduci o metti in pausa">▶</button>
     <button id="nextBtn" aria-label="Brano successivo">⏭</button>
+    <button class="sec" id="fwd10" aria-label="Avanti di 10 secondi">+10</button>
   </div>
 </div>
 
@@ -110,7 +113,7 @@ small{color:var(--muted);display:block}
 
 <script>
 'use strict';
-const VERSION = '0.1';
+const VERSION = '0.2';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -413,6 +416,14 @@ $('ppBtn').onclick = () => {
   if (idx < 0) { if (folderFiles.length) startQueue(0); return; }
   const a = A(); if (a.paused) doPlay(a, idx); else a.pause();
 };
+function seekBy(d) {
+  const a = A();
+  if (idx < 0 || !isFinite(a.duration)) return;
+  a.currentTime = Math.max(0, Math.min(a.duration - 0.5, a.currentTime + d));
+  updateProgress(); updatePosition();
+}
+$('back10').onclick = () => seekBy(-10);
+$('fwd10').onclick = () => seekBy(10);
 $('prevBtn').onclick = prev;
 $('nextBtn').onclick = next;
 
@@ -425,10 +436,15 @@ function setupMediaSession() {
   h('previoustrack', prev);
   h('nexttrack', next);
   h('seekto', d => { A().currentTime = d.seekTime; updatePosition(); });
+  // Senza questi due, iOS mostra i pulsanti ±10 s al posto di brano precedente/successivo
+  h('seekbackward', null);
+  h('seekforward', null);
 }
 function updateMediaSession() {
   if (!('mediaSession' in navigator) || idx < 0 || !queue[idx]) return;
-  try { navigator.mediaSession.metadata = new MediaMetadata({ title: baseName(queue[idx].name), artist: qFolder, album: qFolder }); } catch (e) {}
+  const label = qFolder === crumbs[0].name ? 'Musica' : qFolder;
+  try { navigator.mediaSession.metadata = new MediaMetadata({ title: baseName(queue[idx].name), artist: label, album: label }); } catch (e) {}
+  setupMediaSession();   // riapplica i comandi a ogni cambio brano
   updatePosition();
 }
 function updatePosition() {
