@@ -22,12 +22,13 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.3)
+## Funzioni (v1.4)
 Libreria per artisti e album, ricerca, coda con riproduzione casuale e ripetizione, ±10 secondi,
 comandi sulla schermata di blocco (brano precedente/successivo), ripresa dal punto interrotto,
 aggiornamento incrementale della libreria, diagnostica in Impostazioni.
 
 Equalizzatore sperimentale (spento di default): 10 bande da 31 Hz a 16 kHz e preset
-(Piatto, Mega Bass, Bassi, Rock, Pop, Voce, Classica, Acuti, Loudness). Usa Web Audio:
-su iPhone la musica potrebbe fermarsi a schermo spento o non suonare con l'interruttore
-silenzioso. Se Dropbox non consente l'accesso richiesto, l'equalizzatore si spegne da solo.
+(Piatto, Mega Bass, Bassi, Rock, Pop, Voce, Classica, Acuti, Loudness). Usa Web Audio e
+imposta la sessione audio di iOS su "playback", così Safari lo tratta come musica e non
+come suono di sottofondo. Spegnendolo il lettore torna subito normale, senza ricaricare la
+pagina. Se Dropbox non consente l'accesso richiesto, l'equalizzatore si spegne da solo.
