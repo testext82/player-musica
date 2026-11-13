@@ -165,7 +165,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.1';
+const VERSION = '1.2';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -837,11 +837,26 @@ function albumArt(al, size, cls, style) { return artEl({ img: al.img, name: al.t
 /* ---------------- link di streaming ---------------- */
 const linkCache = new Map();
 function freshLink(path) { const c = linkCache.get(path); return c && Date.now() - c.t < LINK_TTL ? c.link : null; }
-async function tempLink(path) {
-  const c = freshLink(path); if (c) return c;
-  const j = await api('files/get_temporary_link', { path });
-  linkCache.set(path, { link: j.link, t: Date.now() });
-  return j.link;
+const linkWait = new Map();
+function tempLink(path) {
+  const c = freshLink(path); if (c) return Promise.resolve(c);
+  if (linkWait.has(path)) return linkWait.get(path);
+  const p = api('files/get_temporary_link', { path })
+    .then(j => { linkCache.set(path, { link: j.link, t: Date.now() }); return j.link; })
+    .finally(() => linkWait.delete(path));
+  linkWait.set(path, p);
+  return p;
+}
+// chiede il link appena il dito tocca, prima che il tocco diventi un «clic»
+function warm(t) { if (t) tempLink(fileOf(t)).catch(() => {}); }
+let preRandom = null;
+function playBtn(items) {
+  return h('button', { class: 'pill primary', html: ic('play', 18) + 'Riproduci', onpointerdown: () => warm(LIB.tracks.get(items[0])), onclick: () => playQueue(items, 0, false) });
+}
+function shuffleBtn(items) {
+  return h('button', { class: 'pill sec', html: ic('shuffle', 18) + 'Casuale',
+    onpointerdown: () => { preRandom = { items, i: Math.floor(Math.random() * items.length) }; warm(LIB.tracks.get(items[preRandom.i])); },
+    onclick: () => { const i = preRandom && preRandom.items === items ? preRandom.i : null; preRandom = null; playQueue(items, i, true); } });
 }
 async function prefetchLinks(paths) {
   const todo = [...new Set(paths)].filter(p => p && !freshLink(p)); let i = 0;
@@ -1098,7 +1113,7 @@ function renderQueue() {
   const upto = Math.min(Q.order.length, Q.pos + 101);
   for (let p = Q.pos + 1; p < upto; p++) {
     const t = LIB.tracks.get(Q.items[Q.order[p]]); if (!t) continue; const info = trackInfo(t);
-    rows.push(h('button', { class: 'track', onclick: () => loadAndPlay(p) }, h('span', { class: 'tt' }, h('span', null, info.title), h('span', { class: 't2' }, info.artist)), h('span', { class: 'd' }, info.dur ? fmtTime(info.dur) : '')));
+    rows.push(h('button', { class: 'track', onclick: () => loadAndPlay(p), onpointerdown: () => warm(t) }, h('span', { class: 'tt' }, h('span', null, info.title), h('span', { class: 't2' }, info.artist)), h('span', { class: 'd' }, info.dur ? fmtTime(info.dur) : '')));
   }
   if (rows.length === 1) rows.push(h('div', { class: 'empty', style: 'padding:12px 0' }, Q.repeat === 'all' ? 'La coda ricomincia dall\'inizio.' : 'Nessun altro brano in coda.'));
   box.replaceChildren(...rows);
@@ -1194,9 +1209,7 @@ function viewArtist(key) {
   return [backBtnLabeled('Libreria'),
     h('h1', { style: 'margin-top:6px' }, a.name),
     h('div', { class: 'small mut', style: 'margin-top:6px' }, `${plural(a.albums.length, 'album', 'album')} · ${plural(a.count, 'brano', 'brani')}`),
-    h('div', { class: 'btns' },
-      h('button', { class: 'pill primary', html: ic('play', 18) + 'Riproduci', onclick: () => playQueue(all, 0, false) }),
-      h('button', { class: 'pill sec', html: ic('shuffle', 18) + 'Casuale', onclick: () => playQueue(all, null, true) })),
+    h('div', { class: 'btns' }, playBtn(all), shuffleBtn(all)),
     h('div', { class: 'sec-h' }, 'Album'),
     h('div', { class: 'grid' }, ...a.albums.map(k => albumCard(LIB.albums.get(k), false)))];
 }
@@ -1220,23 +1233,21 @@ function viewAlbum(key) {
     if (discs.size > 1 && t.disc !== lastDisc) { lastDisc = t.disc; rows.push(h('div', { class: 'disc' }, t.disc || 'Altri brani')); }
     rows.push(trackRow(t, i, () => playQueue(al.tracks, i)));
   });
-  prefetchLinks(al.tracks.slice(0, 12).map(k => fileOf(LIB.tracks.get(k))));
+  prefetchLinks(al.tracks.map(k => fileOf(LIB.tracks.get(k))).slice(0, 150));
   setTimeout(() => loadAlbumTags(key), 0);
   return [backBtnLabeled(backLabel),
     h('div', { style: 'display:flex;justify-content:center;margin-top:6px' }, albumArt(al, 'w640h480', '', 'width:min(260px,70vw);aspect-ratio:1/1;border-radius:4px;font-size:72px')),
     h('h1', { style: 'margin-top:20px;font-size:26px' }, al.title),
     h('button', { style: 'margin-top:4px;font-size:15px;font-weight:600', onclick: () => go({ v: 'artist', key: al.artistKey }) }, al.artistName),
     h('div', { id: 'albumMeta', class: 'small mut', style: 'display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap' }, h('span', null, meta.text), meta.quality ? h('span', { class: 'badge' }, meta.quality) : null),
-    h('div', { class: 'btns' },
-      h('button', { class: 'pill primary', html: ic('play', 18) + 'Riproduci', onclick: () => playQueue(al.tracks, 0, false) }),
-      h('button', { class: 'pill sec', html: ic('shuffle', 18) + 'Casuale', onclick: () => playQueue(al.tracks, null, true) })),
+    h('div', { class: 'btns' }, playBtn(al.tracks), shuffleBtn(al.tracks)),
     h('div', { style: 'margin-top:10px' }, ...rows)];
 }
 function trackRow(t, i, onclick, sub) {
   const info = trackInfo(t);
   const now = curTrack() && curTrack().lower === t.lower;
   const label = t.numLabel || String(i + 1);
-  const row = h('button', { class: 'track' + (now ? ' now' : ''), 'data-lower': t.lower, onclick },
+  const row = h('button', { class: 'track' + (now ? ' now' : ''), 'data-lower': t.lower, onclick, onpointerdown: () => warm(t) },
     h('span', { class: 'n', html: now ? ic('eq', 16) : '' }, now ? null : label),
     h('span', { class: 'tt' }, h('span', null, info.title), sub ? h('span', { class: 't2' }, sub) : null),
     h('span', { class: 'd' }, info.dur ? fmtTime(info.dur) : ''));
