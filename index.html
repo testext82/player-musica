@@ -176,7 +176,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -879,7 +879,7 @@ async function prefetchLinks(paths) {
 // Un brano può essere un file intero oppure una porzione (start/end) di un album in file unico con .cue
 let audio = $('audio');      // può essere sostituito da un elemento nuovo quando si spegne l'equalizzatore
 let Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' };
-let actBy = null, pausedLogged = false;   // chi ha messo in pausa / fatto ripartire (per il registro)
+let actBy = null, pausedLogged = false, lastBeat = 0;   // chi ha messo in pausa / fatto ripartire (per il registro)
 let pendingSeek = 0, pendingAuto = null, announced = null, lastSave = 0, loadedFile = null;
 const retried = new Set();
 function curTrack() { return Q.pos >= 0 && Q.pos < Q.order.length ? LIB.tracks.get(Q.items[Q.order[Q.pos]]) || null : null; }
@@ -1011,12 +1011,15 @@ function bindAudio(el) {
     const t = curTrack();
     if (t && t.end != null && !seeking && audio.currentTime >= t.end - 0.12) onVirtualEnd(t);
     updateProgress(); if (Date.now() - lastSave > 5000) saveResume();
+    if (isHidden() && t && Date.now() - lastBeat > 60000) {     // battito a schermo spento: dimostra che la musica sta andando avanti
+      lastBeat = Date.now(); log(`… suona ${fmtTime(relTime())} / ${fmtTime(relDur())} «${trackInfo(t).title}»${ac ? ' · motore «' + ac.state + '»' : ''}`);
+    }
   });
   on('waiting', () => { if (isHidden() && Date.now() - lastWaitLog > 10000) { lastWaitLog = Date.now(); log('In attesa di dati (rete lenta?)'); } });
   on('ended', () => {
     const t = curTrack();
     log(`■ Fine brano «${t ? trackInfo(t).title : '?'}»${isHidden() ? ' · schermo spento' : ''}`);
-    if (Q.repeat === 'one') { seekAbs(trackStart(t)); doPlay(); return; }
+    if (Q.repeat === 'one') { log('↻ Ripeto il brano (ripetizione di un brano attiva)'); seekAbs(trackStart(t)); doPlay(); return; }
     const n = nextIndex();
     if (n < 0) { log('Fine della coda'); setPP(); saveResume(true); return; }
     if (isHidden()) pendingAuto = Date.now();
@@ -1036,7 +1039,7 @@ function bindAudio(el) {
 bindAudio(audio);
 document.addEventListener('visibilitychange', () => {
   const music = () => audio.paused ? 'musica in pausa' : 'musica in riproduzione';
-  if (isHidden()) { saveResume(true); if (ac) log(`Schermo spento con equalizzatore: motore audio «${ac.state}», ${music()}`); }
+  if (isHidden()) { lastBeat = Date.now(); saveResume(true); if (ac) log(`Schermo spento con equalizzatore: motore audio «${ac.state}», ${music()}`); }
   else if (ac) { log(`Schermo acceso: motore audio «${ac.state}», ${music()}`); if (!audio.paused) eqWake(); }
   if (!isHidden() && pendingAuto) setTimeout(() => { if (pendingAuto && audio.paused) { log('✗ A schermo spento la musica si è fermata a fine brano'); pendingAuto = null; } }, 2000);
 });
