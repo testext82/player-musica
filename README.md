@@ -22,7 +22,7 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.7)
+## Funzioni (v1.8)
 Libreria per artisti e album, ricerca, coda con riproduzione casuale e ripetizione, ±10 secondi,
 comandi sulla schermata di blocco (brano precedente/successivo), ripresa dal punto interrotto,
 aggiornamento incrementale della libreria, diagnostica in Impostazioni.
@@ -38,7 +38,13 @@ il primo brano viene scaricato in memoria; mentre un brano suona, dopo 5 secondi
 per intero il successivo (sempre uno avanti). I file sono identici agli originali, il passaggio non
 aspetta la rete e il salto nel brano è istantaneo. La memoria si libera al cambio di brano; nulla
 viene salvato sul dispositivo. Uscendo da un album il download non finito si interrompe. I file
-oltre 150 MB restano in streaming. Il registro misura la partenza di ogni brano.
+oltre 150 MB restano in streaming. Il registro misura la partenza di ogni brano e la velocità dei
+download.
+
+Lettore di riserva: un secondo lettore tiene pronto il brano successivo (collegato e con l'inizio già
+caricato) un secondo dopo l'avvio del brano attuale, e il primo brano quando apri un album. Con lo
+schermo acceso ⏭ o un tocco su quel brano lo fanno solo partire. A schermo spento e a fine brano
+resta il passaggio sullo stesso lettore (iOS non permette di cambiare lettore in sottofondo).
 
 Ripartenza automatica (attiva di default, disattivabile in Impostazioni): se iOS ferma la musica
 mentre è in sottofondo (microfono, Siri, chiamata), riparte quando l'interruzione finisce. Non
