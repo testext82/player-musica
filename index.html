@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<!-- La pagina può comunicare solo con Dropbox: nessun altro server riceve dati -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.dropboxapi.com; media-src https://*.dropboxusercontent.com; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Musica">
+<meta name="theme-color" content="#0f1115">
+<title>Musica · prototipo</title>
+<style>
+:root{--bg:#f6f6f4;--card:#fff;--fg:#1b1b1f;--muted:#6b6b73;--line:#e4e4e0;--accent:#2f6fed;--ok:#1f8a4c;--ko:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--fg:#ececf0;--muted:#9a9aa5;--line:#2a2e36;--accent:#6b9bff;--ok:#4cc38a;--ko:#ff6b5b}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+body{padding:env(safe-area-inset-top) 0 calc(170px + env(safe-area-inset-bottom))}
+header{padding:16px 16px 4px}
+h1{font-size:22px;margin:0}
+h2{font-size:15px;margin:0 0 8px}
+.sub{color:var(--muted);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;margin:12px;padding:14px}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--accent);color:#fff;cursor:pointer}
+button.sec{background:transparent;color:var(--accent);border:1px solid var(--line)}
+input[type=text]{font:inherit;width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+code{font:13px ui-monospace,Menlo,monospace;word-break:break-all;background:var(--bg);padding:4px 6px;border-radius:6px;flex:1}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.crumbs{font-size:14px;color:var(--muted);margin-bottom:8px}
+.crumbs a{color:var(--accent);text-decoration:none}
+ul.list{list-style:none;margin:0;padding:0}
+ul.list li{display:flex;align-items:center;gap:10px;padding:12px 4px;border-top:1px solid var(--line);cursor:pointer}
+ul.list li:first-child{border-top:0}
+.ico{width:22px;text-align:center;flex:none;color:var(--muted)}
+.name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meta{color:var(--muted);font-size:12px;flex:none}
+li.now .name{color:var(--accent);font-weight:600}
+.player{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:10px 16px calc(12px + env(safe-area-inset-bottom))}
+.title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctrl{display:flex;justify-content:center;gap:18px;margin-top:4px}
+.ctrl button{width:56px;height:44px;padding:0;font-size:18px}
+input[type=range]{width:100%;margin:8px 0 2px}
+.times{display:flex;justify-content:space-between;color:var(--muted);font-size:12px}
+.log{font:12px/1.45 ui-monospace,Menlo,monospace;max-height:300px;overflow:auto;white-space:pre-wrap;background:var(--bg);border-radius:10px;padding:8px;margin-top:8px}
+.verdict{font-weight:600;font-size:14px;margin:6px 0}
+.ok{color:var(--ok)}.ko{color:var(--ko)}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:6px 0 4px}
+.seg button{flex:1;border-radius:0;background:transparent;color:var(--fg);font-size:14px}
+.seg button.on{background:var(--accent);color:#fff}
+.hidden{display:none!important}
+small{color:var(--muted);display:block}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Musica</h1>
+  <div class="sub">Prototipo di test · streaming da Dropbox · accesso solo alla cartella dell'app, in sola lettura</div>
+</header>
+
+<div class="card ko hidden" id="errorBox"></div>
+
+<section id="setup" class="card hidden">
+  <h2>1 · Configurazione</h2>
+  <p class="sub">Indirizzo da inserire in Dropbox come «Redirect URI»:</p>
+  <div class="row"><code id="redirectUri"></code><button class="sec" id="copyRedirect">Copia</button></div>
+  <p class="sub" style="margin-top:14px">Incolla qui l'«App key» della tua app Dropbox:</p>
+  <input type="text" id="appKeyInput" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="es. a1b2c3d4e5f6g7h">
+  <div class="row" style="margin-top:10px"><button id="saveKey">Salva</button></div>
+</section>
+
+<section id="login" class="card hidden">
+  <h2>2 · Collega Dropbox</h2>
+  <p class="sub">L'app chiede solo di leggere la propria cartella: il resto del tuo Dropbox resta invisibile.</p>
+  <div class="row"><button id="loginBtn">Collega Dropbox</button><button class="sec" id="changeKey">Cambia App key</button></div>
+</section>
+
+<section id="browser" class="card hidden">
+  <div class="crumbs" id="crumbs"></div>
+  <div class="row" style="margin-bottom:6px"><button id="playAll" class="hidden">▶ Riproduci tutto</button><span id="folderInfo" class="sub"></span></div>
+  <ul class="list" id="list"></ul>
+</section>
+
+<section id="test" class="card hidden">
+  <h2>Test a schermo spento</h2>
+  <div class="sub">Passaggio al brano successivo:</div>
+  <div class="seg"><button id="modeStd">Standard</button><button id="modeAnt">Anticipato (sperimentale)</button></div>
+  <small id="modeHelp"></small>
+  <div id="verdicts"></div>
+  <div class="log" id="log"></div>
+  <div class="row" style="margin-top:8px"><button class="sec" id="copyLog">Copia registro</button><button class="sec" id="clearLog">Svuota registro</button></div>
+  <p class="sub" id="diag"></p>
+  <div class="row"><button class="sec" id="logout">Scollega Dropbox</button></div>
+</section>
+
+<div class="player hidden" id="player">
+  <div class="title" id="npTitle">—</div>
+  <div class="sub" id="npSub"></div>
+  <input type="range" id="seek" min="0" max="1000" value="0" aria-label="Posizione nel brano">
+  <div class="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
+  <div class="ctrl">
+    <button id="prevBtn" aria-label="Brano precedente">⏮</button>
+    <button id="ppBtn" aria-label="Riproduci o metti in pausa">▶</button>
+    <button id="nextBtn" aria-label="Brano successivo">⏭</button>
+  </div>
+</div>
+
+<audio id="a0" preload="auto"></audio>
+<audio id="a1" preload="auto"></audio>
+
+<script>
+'use strict';
+const VERSION = '0.1';
+const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
+const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
+const API = 'https://api.dropboxapi.com/2/';
+const SCOPES = 'files.metadata.read files.content.read';
+const REDIRECT_URI = location.origin + location.pathname;
+const AUDIO_EXT = ['flac', 'mp3', 'm4a', 'aac', 'wav', 'aif', 'aiff', 'alac', 'ogg', 'opus', 'caf'];
+const LINK_TTL = 3.5 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo prima
+const LEAD = 0.4;                     // secondi di anticipo nella modalità anticipata
+const K = { appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log', mode: 'mx_mode' };
+
+const $ = id => document.getElementById(id);
+const store = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} };
+const load = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+
+class NeedLogin extends Error {}
+
+let accessToken = null, accessExp = 0;
+let crumbs = [{ name: "Cartella dell'app", path: '' }];
+let folderFiles = [];
+let queue = [], qFolder = '', idx = -1;
+let mode = load(K.mode) === 'anticipato' ? 'anticipato' : 'standard';
+const els = [$('a0'), $('a1')];
+let act = 0;            // lettore attivo (0 o 1)
+let advanced = false;   // modalità anticipata: passaggio già avvenuto
+let preparedIdx = -1;   // modalità anticipata: brano precaricato sul secondo lettore
+let pending = null;     // fine brano avvenuta a schermo spento, in attesa del successivo
+let seeking = false;
+let announced = -1;     // ultimo brano annunciato nel registro
+const linkCache = new Map();
+const retried = new Set();
+
+/* ---------- utilità ---------- */
+function el(tag, props, ...kids) { const e = document.createElement(tag); if (props) Object.assign(e, props); e.append(...kids); return e; }
+function fmtTime(s) { if (!isFinite(s) || s < 0) return '0:00'; s = Math.floor(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function fmtSize(b) { return b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : (b / 1e6).toFixed(1) + ' MB'; }
+function ext(n) { const i = n.lastIndexOf('.'); return i < 0 ? '' : n.slice(i + 1).toLowerCase(); }
+function baseName(n) { const i = n.lastIndexOf('.'); return i < 0 ? n : n.slice(0, i); }
+function isAudio(n) { return AUDIO_EXT.includes(ext(n)); }
+function isHidden() { return document.visibilityState !== 'visible'; }
+function isStandalone() { return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; }
+function b64url(bytes) { let s = ''; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function showError(msg) { const b = $('errorBox'); b.textContent = msg || ''; b.classList.toggle('hidden', !msg); }
+function safe(p) {
+  return Promise.resolve(p).catch(e => {
+    if (e instanceof NeedLogin) { accessToken = null; store(K.refresh, null); showError('Sessione Dropbox scaduta: ricollega Dropbox.'); render(); }
+    else showError(e.message || String(e));
+  });
+}
+async function copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); const t = btn.textContent; btn.textContent = 'Copiato ✓'; setTimeout(() => { btn.textContent = t; }, 1500); }
+  catch (e) { window.prompt('Copia manualmente:', text); }
+}
+
+/* ---------- registro di test ---------- */
+let logLines = [];
+try { logLines = JSON.parse(load(K.log) || '[]'); } catch (e) { logLines = []; }
+function log(msg) {
+  const t = new Date().toLocaleTimeString('it-IT', { hour12: false });
+  logLines.push(`${t} [${isHidden() ? 'spento' : 'acceso'}] ${msg}`);
+  if (logLines.length > 400) logLines = logLines.slice(-400);
+  store(K.log, JSON.stringify(logLines));
+  renderLog();
+}
+function renderLog() {
+  $('log').textContent = logLines.slice().reverse().join('\n');
+  const v = logLines.filter(l => l.includes('✅') || l.includes('❌')).slice(-6);
+  $('verdicts').replaceChildren(...v.map(l => el('div', { className: 'verdict ' + (l.includes('✅') ? 'ok' : 'ko'), textContent: l })));
+}
+
+/* ---------- accesso Dropbox (OAuth PKCE, senza server) ---------- */
+async function startLogin() {
+  const appKey = load(K.appKey);
+  if (!appKey) { render(); return; }
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  store(K.verifier, verifier); store(K.state, state);
+  const p = new URLSearchParams({
+    client_id: appKey, response_type: 'code', code_challenge: b64url(new Uint8Array(digest)), code_challenge_method: 'S256',
+    redirect_uri: REDIRECT_URI, token_access_type: 'offline', scope: SCOPES, state
+  });
+  location.href = AUTH_URL + '?' + p.toString();
+}
+async function handleRedirect() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('code') && !q.has('error')) return;
+  history.replaceState(null, '', REDIRECT_URI);
+  if (q.has('error')) { showError('Collegamento a Dropbox non completato: ' + (q.get('error_description') || q.get('error'))); return; }
+  if (q.get('state') !== load(K.state)) { showError('Risposta di Dropbox non valida. Riprova il collegamento.'); return; }
+  const body = new URLSearchParams({ code: q.get('code'), grant_type: 'authorization_code', code_verifier: load(K.verifier) || '', client_id: load(K.appKey) || '', redirect_uri: REDIRECT_URI });
+  const r = await fetch(TOKEN_URL, { method: 'POST', body });
+  const j = await r.json().catch(() => ({}));
+  store(K.verifier, null); store(K.state, null);
+  if (!r.ok) { showError('Errore nel collegamento: ' + (j.error_description || j.error || r.status)); return; }
+  setToken(j);
+  if (j.refresh_token) store(K.refresh, j.refresh_token);
+  log('Dropbox collegato · permessi: ' + (j.scope || SCOPES));
+}
+function setToken(j) { accessToken = j.access_token; accessExp = Date.now() + Math.max(60, (j.expires_in || 14400) - 120) * 1000; }
+async function getToken() {
+  if (accessToken && Date.now() < accessExp) return accessToken;
+  const rt = load(K.refresh);
+  if (!rt) throw new NeedLogin('non collegato');
+  const r = await fetch(TOKEN_URL, { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rt, client_id: load(K.appKey) || '' }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new NeedLogin(j.error_description || 'sessione scaduta');
+  setToken(j);
+  return accessToken;
+}
+async function api(endpoint, args, retry = true) {
+  const t = await getToken();
+  const r = await fetch(API + endpoint, { method: 'POST', headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' }, body: JSON.stringify(args) });
+  if (r.status === 401 && retry) { accessToken = null; return api(endpoint, args, false); }
+  if (!r.ok) { const txt = await r.text().catch(() => ''); throw new Error(`Dropbox (${endpoint}) ha risposto ${r.status}: ${txt.slice(0, 200)}`); }
+  return r.json();
+}
+async function logout() {
+  try { const t = await getToken(); await fetch(API + 'auth/token/revoke', { method: 'POST', headers: { 'Authorization': 'Bearer ' + t } }); } catch (e) {}
+  accessToken = null; store(K.refresh, null);
+  els.forEach(resetEl); idx = -1; queue = []; folderFiles = []; linkCache.clear(); pending = null;
+  $('player').classList.add('hidden');
+  log('Dropbox scollegato: permesso revocato');
+  render();
+}
+
+/* ---------- cartelle e link di streaming ---------- */
+function freshLink(path) { const c = linkCache.get(path); return c && Date.now() - c.t < LINK_TTL ? c.link : null; }
+async function tempLink(path) {
+  const c = freshLink(path); if (c) return c;
+  const j = await api('files/get_temporary_link', { path });
+  linkCache.set(path, { link: j.link, t: Date.now() });
+  return j.link;
+}
+async function prefetchLinks(files) {
+  const todo = files.filter(f => !freshLink(f.path_lower));
+  let i = 0;
+  const worker = async () => { while (i < todo.length) { const f = todo[i++]; try { await tempLink(f.path_lower); } catch (e) { log('Link non ottenuto per «' + f.name + '»: ' + e.message); } } };
+  await Promise.all([worker(), worker(), worker()]);
+}
+async function openFolder(path) {
+  showError('');
+  $('list').replaceChildren(el('li', { textContent: 'Caricamento…' }));
+  let res = await api('files/list_folder', { path });
+  let entries = res.entries;
+  while (res.has_more) { res = await api('files/list_folder/continue', { cursor: res.cursor }); entries = entries.concat(res.entries); }
+  const cmp = (a, b) => a.name.localeCompare(b.name, 'it', { numeric: true, sensitivity: 'base' });
+  const folders = entries.filter(e => e['.tag'] === 'folder').sort(cmp);
+  folderFiles = entries.filter(e => e['.tag'] === 'file' && isAudio(e.name)).sort(cmp);
+  renderFolder(folders);
+  prefetchLinks(folderFiles);
+}
+function renderFolder(folders) {
+  const c = $('crumbs'); c.replaceChildren();
+  crumbs.forEach((cr, i) => {
+    if (i) c.append(' / ');
+    if (i < crumbs.length - 1) {
+      const a = el('a', { href: '#', textContent: cr.name });
+      a.onclick = ev => { ev.preventDefault(); crumbs = crumbs.slice(0, i + 1); safe(openFolder(cr.path)); };
+      c.append(a);
+    } else c.append(el('strong', { textContent: cr.name }));
+  });
+  const ul = $('list'); ul.replaceChildren();
+  for (const f of folders) {
+    const li = el('li', null, el('span', { className: 'ico', textContent: '📁' }), el('span', { className: 'name', textContent: f.name }));
+    li.onclick = () => { crumbs.push({ name: f.name, path: f.path_lower }); safe(openFolder(f.path_lower)); };
+    ul.append(li);
+  }
+  folderFiles.forEach((f, i) => {
+    const li = el('li', null, el('span', { className: 'ico', textContent: '♪' }), el('span', { className: 'name', textContent: baseName(f.name) }), el('span', { className: 'meta', textContent: ext(f.name).toUpperCase() + ' · ' + fmtSize(f.size) }));
+    li.dataset.path = f.path_lower;
+    li.onclick = () => startQueue(i);
+    ul.append(li);
+  });
+  if (!folders.length && !folderFiles.length) ul.append(el('li', { textContent: 'Cartella vuota: da Dropbox copia qui alcuni brani.' }));
+  $('playAll').classList.toggle('hidden', !folderFiles.length);
+  $('folderInfo').textContent = folderFiles.length ? folderFiles.length + ' brani' : '';
+  markNowPlaying();
+}
+
+/* ---------- lettore ---------- */
+const A = () => els[act];   // lettore attivo
+const B = () => els[1 - act];
+function resetEl(e) { try { e.pause(); e.removeAttribute('src'); e.load(); } catch (_) {} }
+function doPlay(a, i) {
+  const p = a.play();
+  if (p && p.catch) p.catch(e => log(`play() rifiutato per il brano ${i + 1}: ${e.name}`));
+}
+function startQueue(i) {
+  queue = folderFiles.slice(); qFolder = crumbs[crumbs.length - 1].name; pending = null; retried.clear(); announced = -1;
+  log(`Avvio coda: ${queue.length} brani da «${qFolder}» · modalità ${mode}`);
+  playAt(i);
+}
+function playAt(i) {
+  if (i < 0 || i >= queue.length) { log('Fine della coda'); pending = null; setPP(); return; }
+  idx = i; advanced = false; preparedIdx = -1;
+  resetEl(B());
+  const a = A(), f = queue[i], link = freshLink(f.path_lower);
+  if (link) { a.src = link; doPlay(a, i); }   // percorso sincrono: importante per iOS
+  else tempLink(f.path_lower).then(l => { if (idx === i) { a.src = l; doPlay(a, i); } }).catch(e => log('❗ Link non disponibile: ' + e.message));
+  updateNowPlaying();
+}
+function next() { pending = null; if (idx + 1 < queue.length) playAt(idx + 1); }
+function prev() { pending = null; const a = A(); if (a.currentTime > 3 || idx <= 0) { a.currentTime = 0; return; } playAt(idx - 1); }
+function ensureAhead() { for (let j = idx + 1; j <= idx + 2 && j < queue.length; j++) if (!freshLink(queue[j].path_lower)) tempLink(queue[j].path_lower).catch(() => {}); }
+
+function prepareNext() {
+  const n = idx + 1; if (mode !== 'anticipato' || n >= queue.length) return;
+  const b = B(), f = queue[n];
+  if (preparedIdx === n) return;
+  const go = l => {
+    const doLoad = () => { if (idx + 1 !== n || advanced || mode !== 'anticipato' || preparedIdx === n) return; b.src = l; b.load(); preparedIdx = n; log(`Precaricato il brano ${n + 1} sul secondo lettore`); };
+    if (b.paused || b.ended) doLoad(); else b.addEventListener('ended', doLoad, { once: true });   // lascia finire la coda del brano precedente
+  };
+  const l = freshLink(f.path_lower);
+  if (l) go(l); else tempLink(f.path_lower).then(go).catch(e => log('Precaricamento non riuscito: ' + e.message));
+}
+function swapAndPlay() {
+  if (isHidden() && !pending) pending = { from: idx + 1, at: Date.now() };
+  act = 1 - act; idx += 1; advanced = false; preparedIdx = -1;
+  doPlay(A(), idx);
+  updateNowPlaying();
+}
+
+function onPlaying(k) {
+  if (k !== act) return;
+  setPP();
+  const n = idx + 1;
+  if (pending) {
+    const dt = ((Date.now() - pending.at) / 1000).toFixed(1);
+    if (isHidden()) log(`✅ TEST SUPERATO: il brano ${n} è partito da solo a schermo spento (dopo ${dt} s)`);
+    else log(`❌ TEST FALLITO: il brano ${n} è partito solo dopo lo sblocco (attesa ${dt} s)`);
+    pending = null; announced = idx;
+  } else if (announced !== idx) { log(`▶ In riproduzione: brano ${n} «${baseName(queue[idx].name)}»`); announced = idx; }
+  ensureAhead();
+  prepareNext();
+  updateMediaSession();
+}
+function onEnded(k) {
+  if (k !== act) return;   // modalità anticipata: è finito il brano precedente, già superato
+  log(`■ Fine brano ${idx + 1}`);
+  if (idx + 1 >= queue.length) { log('Fine della coda'); setPP(); return; }
+  if (isHidden()) pending = { from: idx + 1, at: Date.now() };
+  if (mode === 'anticipato' && preparedIdx === idx + 1) { log(`Passaggio a fine brano (secondo lettore) al brano ${idx + 2}`); swapAndPlay(); }
+  else playAt(idx + 1);
+}
+function onTime(k) {
+  if (k !== act) return;
+  updateProgress();
+  const a = A();
+  if (mode === 'anticipato' && !advanced && preparedIdx === idx + 1 && isFinite(a.duration) && a.duration - a.currentTime <= LEAD) {
+    advanced = true;
+    log(`Passaggio anticipato al brano ${idx + 2}`);
+    swapAndPlay();
+  }
+}
+function onErr(k) {
+  const e = els[k];
+  if (!e.getAttribute('src')) return;
+  const code = e.error ? e.error.code : 0;
+  const why = { 1: 'interrotto', 2: 'errore di rete', 3: 'errore di decodifica', 4: 'formato non supportato o link scaduto' }[code] || 'sconosciuto';
+  if (k !== act) { log(`Precaricamento non riuscito: ${why}`); preparedIdx = -1; return; }
+  const f = queue[idx];
+  log(`❗ Errore sul brano ${idx + 1}: ${why} (codice ${code})`);
+  if (f && !retried.has(f.path_lower)) { retried.add(f.path_lower); linkCache.delete(f.path_lower); playAt(idx); return; }
+  if (idx + 1 < queue.length) playAt(idx + 1);
+}
+els.forEach((e, k) => {
+  e.addEventListener('playing', () => onPlaying(k));
+  e.addEventListener('ended', () => onEnded(k));
+  e.addEventListener('timeupdate', () => onTime(k));
+  e.addEventListener('pause', () => { if (k === act) setPP(); });
+  e.addEventListener('waiting', () => { if (k === act) log('In attesa di dati (buffering)…'); });
+  e.addEventListener('loadedmetadata', () => { if (k === act) { updateProgress(); updatePosition(); } });
+  e.addEventListener('error', () => onErr(k));
+});
+
+/* ---------- interfaccia del lettore ---------- */
+function setPP() { $('ppBtn').textContent = A().paused ? '▶' : '⏸'; }
+function markNowPlaying() { const p = queue[idx] && queue[idx].path_lower; for (const li of $('list').children) li.classList.toggle('now', !!p && li.dataset.path === p); }
+function updateNowPlaying() {
+  const f = queue[idx];
+  $('player').classList.remove('hidden');
+  $('npTitle').textContent = f ? baseName(f.name) : '—';
+  $('npSub').textContent = f ? `${qFolder} · ${idx + 1}/${queue.length} · ${ext(f.name).toUpperCase()}` : '';
+  setPP(); markNowPlaying(); updateMediaSession(); updateProgress();
+}
+function updateProgress() {
+  const a = A();
+  $('tCur').textContent = fmtTime(a.currentTime);
+  $('tDur').textContent = fmtTime(a.duration);
+  if (!seeking) $('seek').value = isFinite(a.duration) && a.duration > 0 ? Math.round(a.currentTime / a.duration * 1000) : 0;
+}
+$('seek').addEventListener('input', () => { seeking = true; const a = A(); if (isFinite(a.duration)) $('tCur').textContent = fmtTime($('seek').value / 1000 * a.duration); });
+$('seek').addEventListener('change', () => {
+  const a = A();
+  if (isFinite(a.duration) && a.duration > 0) { a.currentTime = $('seek').value / 1000 * a.duration; log(`Salto a ${fmtTime(a.currentTime)} nel brano ${idx + 1}`); }
+  seeking = false; updatePosition();
+});
+$('ppBtn').onclick = () => {
+  if (idx < 0) { if (folderFiles.length) startQueue(0); return; }
+  const a = A(); if (a.paused) doPlay(a, idx); else a.pause();
+};
+$('prevBtn').onclick = prev;
+$('nextBtn').onclick = next;
+
+/* ---------- comandi sulla schermata di blocco ---------- */
+function setupMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  const h = (n, f) => { try { navigator.mediaSession.setActionHandler(n, f); } catch (e) {} };
+  h('play', () => { if (idx >= 0) doPlay(A(), idx); });
+  h('pause', () => A().pause());
+  h('previoustrack', prev);
+  h('nexttrack', next);
+  h('seekto', d => { A().currentTime = d.seekTime; updatePosition(); });
+}
+function updateMediaSession() {
+  if (!('mediaSession' in navigator) || idx < 0 || !queue[idx]) return;
+  try { navigator.mediaSession.metadata = new MediaMetadata({ title: baseName(queue[idx].name), artist: qFolder, album: qFolder }); } catch (e) {}
+  updatePosition();
+}
+function updatePosition() {
+  const a = A();
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState || !isFinite(a.duration) || a.duration <= 0) return;
+  try { navigator.mediaSession.setPositionState({ duration: a.duration, playbackRate: a.playbackRate || 1, position: Math.min(a.currentTime, a.duration) }); } catch (e) {}
+}
+
+/* ---------- schermo acceso/spento ---------- */
+document.addEventListener('visibilitychange', () => {
+  log(isHidden() ? '— Schermo spento / app in background' : '— Schermo acceso / app in primo piano');
+  if (!isHidden() && pending) setTimeout(() => {
+    if (pending && A().paused) { log(`❌ TEST FALLITO: dopo la fine del brano ${pending.from} la musica si è fermata a schermo spento`); pending = null; }
+  }, 2000);
+});
+
+/* ---------- modalità e schermate ---------- */
+function setMode(m) {
+  mode = m; store(K.mode, m);
+  $('modeStd').classList.toggle('on', m === 'standard');
+  $('modeAnt').classList.toggle('on', m === 'anticipato');
+  $('modeHelp').textContent = m === 'standard'
+    ? 'Un solo lettore: a fine brano carica il successivo. È il comportamento classico.'
+    : 'Due lettori: il brano successivo viene precaricato e avviato pochi decimi di secondo prima della fine. Le code dei brani possono sovrapporsi per un istante.';
+  if (m === 'standard' && preparedIdx >= 0) { resetEl(B()); preparedIdx = -1; }
+  if (m === 'anticipato' && idx >= 0 && !A().paused) prepareNext();
+}
+$('modeStd').onclick = () => { setMode('standard'); log('Modalità: standard'); };
+$('modeAnt').onclick = () => { setMode('anticipato'); log('Modalità: anticipato'); };
+
+function render() {
+  const hasKey = !!load(K.appKey), linked = !!(load(K.refresh) || accessToken);
+  $('setup').classList.toggle('hidden', hasKey);
+  $('login').classList.toggle('hidden', !hasKey || linked);
+  $('browser').classList.toggle('hidden', !linked);
+  $('test').classList.toggle('hidden', !hasKey);
+  $('logout').classList.toggle('hidden', !linked);
+}
+function diag() {
+  const probe = document.createElement('audio');
+  const flac = probe.canPlayType('audio/flac') || probe.canPlayType('audio/x-flac');
+  $('diag').textContent = `v${VERSION} · FLAC: ${flac ? 'supportato' : 'non supportato'} · aperta ${isStandalone() ? 'dalla schermata Home' : 'nel browser'} · comandi schermata di blocco: ${'mediaSession' in navigator ? 'sì' : 'no'}`;
+}
+
+$('redirectUri').textContent = REDIRECT_URI;
+$('copyRedirect').onclick = () => copy(REDIRECT_URI, $('copyRedirect'));
+$('saveKey').onclick = () => {
+  const v = $('appKeyInput').value.trim();
+  if (!/^[a-z0-9]{8,32}$/i.test(v)) { showError('App key non valida: copiala dalla scheda «Settings» della tua app Dropbox.'); return; }
+  store(K.appKey, v); showError(''); render();
+};
+$('changeKey').onclick = () => { store(K.appKey, null); render(); };
+$('loginBtn').onclick = () => safe(startLogin());
+$('copyLog').onclick = () => copy(logLines.join('\n'), $('copyLog'));
+$('clearLog').onclick = () => { logLines = []; store(K.log, null); renderLog(); };
+$('logout').onclick = () => safe(logout());
+$('playAll').onclick = () => startQueue(0);
+
+(async function boot() {
+  setMode(mode); setupMediaSession(); diag(); renderLog();
+  log(`App aperta ${isStandalone() ? 'dalla schermata Home' : 'nel browser'} · v${VERSION}`);
+  try { await handleRedirect(); } catch (e) { showError('Errore nel collegamento: ' + e.message); }
+  render();
+  if (load(K.refresh) || accessToken) safe(openFolder(''));
+})();
+</script>
+</body>
+</html>
