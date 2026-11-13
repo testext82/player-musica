@@ -176,7 +176,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.4.2';
+const VERSION = '1.5';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -185,7 +185,7 @@ const SCOPES = 'files.metadata.read files.content.read';
 const REDIRECT_URI = location.origin + location.pathname;
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
 const K = { appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
-            index: 'mx_index_v2', tags: 'mx_tags_v1', ameta: 'mx_ameta_v1', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1' };
+            index: 'mx_index_v2', tags: 'mx_tags_v1', ameta: 'mx_ameta_v1', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
 
 /* ---------------- riconoscimento della libreria (funzioni pure) ---------------- */
@@ -879,7 +879,32 @@ async function prefetchLinks(paths) {
 // Un brano può essere un file intero oppure una porzione (start/end) di un album in file unico con .cue
 let audio = $('audio');      // può essere sostituito da un elemento nuovo quando si spegne l'equalizzatore
 let Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' };
-let actBy = null, pausedLogged = false, lastBeat = 0;   // chi ha messo in pausa / fatto ripartire (per il registro)
+let actBy = null, pausedLogged = false, lastBeat = 0;
+/* ripartenza automatica: se è iOS a fermare la musica (microfono, Siri, chiamata), riparte quando l'interruzione finisce */
+let sysPause = 0;
+const AUTO_MAX = 10 * 60 * 1000;      // oltre 10 minuti di interruzione la musica resta in pausa
+const autoResumeOn = () => load(K.autoResume) !== 'off';
+function interruptionEnded(source) {
+  if (!sysPause) return;
+  const age = Date.now() - sysPause; sysPause = 0;
+  if (!autoResumeOn() || !audio.paused || !curTrack()) return;
+  // solo con il lettore in sottofondo: se sei sulla pagina (es. hai appena staccato le cuffie) decidi tu
+  if (!isHidden()) { log('Interruzione finita con il lettore aperto: la musica resta in pausa'); return; }
+  if (age > AUTO_MAX) { log(`Interruzione di iOS durata ${Math.round(age / 60000)} min: la musica resta in pausa`); return; }
+  log(`↻ Ripartenza automatica dopo l'interruzione di iOS (${Math.round(age / 1000)} s · ${source})`);
+  pausedLogged = false; actBy = 'ripartenza automatica'; doPlay();
+}
+function watchAudioSession() {      // dove Safari lo permette, la sessione audio avvisa anche senza equalizzatore
+  const as = navigator.audioSession;
+  if (!as || !('state' in as) || typeof as.addEventListener !== 'function') return;
+  let prev = as.state;
+  as.addEventListener('statechange', () => {
+    const st = as.state; if (st === prev) return;
+    log(`Sessione audio: «${st}»`);
+    if (prev === 'interrupted' && st !== 'interrupted') interruptionEnded('sessione audio');
+    prev = st;
+  });
+}   // chi ha messo in pausa / fatto ripartire (per il registro)
 let pendingSeek = 0, pendingAuto = null, announced = null, lastSave = 0, loadedFile = null;
 const retried = new Set();
 function curTrack() { return Q.pos >= 0 && Q.pos < Q.order.length ? LIB.tracks.get(Q.items[Q.order[Q.pos]]) || null : null; }
@@ -1000,10 +1025,12 @@ function bindAudio(el) {
     setPP(); saveResume(true);
     if (audio.getAttribute('src') && audio.readyState > 0 && !audio.ended && actBy !== 'fine della coda') {
       log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}`); pausedLogged = true;
+      sysPause = actBy ? 0 : Date.now();
     }
     actBy = null;
   });
   on('play', () => {
+    sysPause = 0;
     if (pausedLogged) { log(`▶ Riprende · ${actBy || 'iOS'}${isHidden() ? ' · schermo spento' : ''}`); pausedLogged = false; }
     actBy = null;
   });
@@ -1133,9 +1160,12 @@ function ensureGraph() {
     eqFilters = BANDS.map((f, i) => { const b = ac.createBiquadFilter(); b.type = i === 0 ? 'lowshelf' : i === BANDS.length - 1 ? 'highshelf' : 'peaking'; b.frequency.value = f; b.Q.value = 1.1; b.gain.value = 0; return b; });
     src.connect(eqPre); let n = eqPre; for (const f of eqFilters) { n.connect(f); n = f; } n.connect(ac.destination);
     const ctx = ac;
+    let prevState = ctx.state;
     ctx.onstatechange = () => {
       log(`Equalizzatore: motore audio «${ctx.state}»`);
       if (ctx === ac && ctx.state !== 'running' && ctx.state !== 'closed' && !audio.paused) ctx.resume().catch(() => {});
+      if (ctx === ac && prevState === 'interrupted' && ctx.state === 'running') interruptionEnded('motore equalizzatore');
+      prevState = ctx.state;
     };
     return true;
   } catch (e) { log('Equalizzatore non disponibile: ' + e.message); ac = null; return false; }
@@ -1200,6 +1230,17 @@ function eqPanel() {
     });
   }
   return wrap;
+}
+function autoResumeBox() {
+  const box = h('div', { class: 'box' });
+  const draw = () => {
+    const on = autoResumeOn();
+    box.replaceChildren(h('div', { class: 'eq' },
+      h('div', { class: 'between' }, h('strong', null, 'Ripartenza automatica'),
+        h('button', { class: 'btn' + (on ? ' sec' : ''), onclick: () => { store(K.autoResume, on ? 'off' : null); log('Ripartenza automatica ' + (on ? 'disattivata' : 'attivata')); draw(); } }, on ? 'Disattiva' : 'Attiva')),
+      h('p', { class: 'small mut' }, 'Se iOS ferma la musica mentre è in sottofondo (microfono, Siri, chiamata), riparte da sola quando l\'interruzione finisce. Non riparte se l\'hai messa in pausa tu, se l\'interruzione dura più di 10 minuti o se in quel momento hai il lettore aperto. Senza equalizzatore funziona solo se Safari segnala la fine dell\'interruzione.')));
+  };
+  draw(); return box;
 }
 function refreshEqUI() {
   document.querySelectorAll('[data-eq-host]').forEach(host => { if (host.id !== 'eqBox' || eqOpen) host.replaceChildren(eqPanel()); });
@@ -1470,6 +1511,7 @@ function viewSettings() {
       h('div', { class: 'btnrow' }, h('button', { class: 'btn', onclick: () => syncIndex() }, 'Aggiorna'),
         h('button', { class: 'btn sec', onclick: () => { TAGS = {}; AMETA = {}; CUES = {}; [K.tags, K.ameta, K.cues].forEach(k => store(k, null)); embeddedArt.clear(); noPic.clear(); syncIndex(true); } }, 'Ricostruisci da zero'))),
     h('div', { class: 'box', 'data-eq-host': '' }, eqPanel()),
+    autoResumeBox(),
     h('div', { class: 'box' }, h('h2', null, 'Come copiare la musica'),
       h('p', null, 'Copia le cartelle degli album così come sono dentro Applicazioni › [nome dell\'app]. L\'app ricava artista, album e anno dal nome della cartella («Artista - Album (2011) [FLAC 16-44]», «1983 - Artista - Album», …) e poi li corregge con i dati contenuti nei FLAC.'),
       h('p', null, 'Funzionano anche: cartelle Artista › Album, dischi multipli (CD1, Disc 2), album in un unico FLAC con file .cue, copertine in sottocartelle (Artwork, Covers, Scans).')),
@@ -1508,7 +1550,7 @@ seek.addEventListener('change', () => {
   if (t) seekAbs(trackStart(t) + seek.value / 1000 * relDur());
   seeking = false; updateProgress(); updatePosition();
 });
-setPP(); updateModes(); setupMediaSession();
+setPP(); updateModes(); setupMediaSession(); watchAudioSession();
 if (EQ.on) { if (ensureGraph()) applyEq(); else EQ.on = false; }
 $('pEq').classList.toggle('on', EQ.on);
 

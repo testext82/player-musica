@@ -22,7 +22,7 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.4)
+## Funzioni (v1.5)
 Libreria per artisti e album, ricerca, coda con riproduzione casuale e ripetizione, ±10 secondi,
 comandi sulla schermata di blocco (brano precedente/successivo), ripresa dal punto interrotto,
 aggiornamento incrementale della libreria, diagnostica in Impostazioni.
@@ -32,3 +32,9 @@ Equalizzatore sperimentale (spento di default): 10 bande da 31 Hz a 16 kHz e pre
 imposta la sessione audio di iOS su "playback", così Safari lo tratta come musica e non
 come suono di sottofondo. Spegnendolo il lettore torna subito normale, senza ricaricare la
 pagina. Se Dropbox non consente l'accesso richiesto, l'equalizzatore si spegne da solo.
+
+Ripartenza automatica (attiva di default, disattivabile in Impostazioni): se iOS ferma la musica
+mentre è in sottofondo (microfono, Siri, chiamata), riparte quando l'interruzione finisce. Non
+riparte dopo una pausa data da te, dopo più di 10 minuti o se il lettore è aperto. Il segnale di
+fine interruzione arriva dal motore dell'equalizzatore oppure, se Safari lo fornisce, dalla
+sessione audio.
