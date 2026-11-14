@@ -25,7 +25,12 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.14)
+## Funzioni (v1.15)
+
+Copertine salvate sul dispositivo (IndexedDB «mx_covers»): miniature fino a 256 px e copertine incorporate
+ridotte a 800 px, legate alla revisione del file su Dropbox. All'apertura si vedono subito; dopo l'avvio il
+player scarica in sottofondo quelle mancanti. Si cancellano in Impostazioni. Nessun file musicale viene salvato.
+
 
 Mix da un brano, un album o un artista («Avvia un mix da qui»): stesso artista (al massimo 40%), artisti ascoltati
 negli stessi momenti, stesso genere, preferiti. Playlist automatiche: I più ascoltati del mese, Mai ascoltati,

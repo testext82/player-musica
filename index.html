@@ -210,7 +210,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.14';
+const VERSION = '1.15';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -865,8 +865,86 @@ async function loadAlbumTags(albumKey) {
 function setEmbeddedArt(albumKey, pic) {
   const url = URL.createObjectURL(new Blob([pic.data], { type: pic.mime }));
   embeddedArt.set(albumKey, url);
+  const al = LIB.albums.get(albumKey);
+  if (al && !ART.mem.has(embKey(al))) shrinkToDataUrl(url).then(d => { if (d) coverPut(embKey(al), d); });
   document.querySelectorAll('.art[data-album]').forEach(e => { if (e.dataset.album === albumKey && !e.dataset.img) setArtImg(e, url); });
   if (curTrack() && curTrack().albumKey === albumKey) updateNowPlaying();
+}
+
+/* ---------------- copertine salvate sul dispositivo ----------------
+   Solo immagini piccole (miniature e copertine incorporate ridotte), in un archivio di Safari:
+   all'apertura dell'app si vedono subito, senza aspettare Dropbox. Nessun file musicale viene salvato. */
+const ART = { db: null, ready: null, mem: new Map(), saveQ: new Map(), timer: null };
+function artDbOpen() {
+  return new Promise(res => {
+    try {
+      const r = indexedDB.open('mx_covers', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('c');
+      r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null);
+    } catch (e) { res(null); }
+  });
+}
+function loadCoverCache() {          // all'avvio carico tutto in memoria (al massimo 400 ms di attesa)
+  ART.ready = (async () => {
+    ART.db = await artDbOpen(); if (!ART.db) return;
+    await new Promise(res => {
+      try {
+        const rq = ART.db.transaction('c', 'readonly').objectStore('c').openCursor();
+        rq.onsuccess = () => { const c = rq.result; if (!c) return res(); ART.mem.set(c.key, c.value); c.continue(); };
+        rq.onerror = () => res();
+      } catch (e) { res(); }
+    });
+  })();
+  return Promise.race([ART.ready, new Promise(r => setTimeout(r, 400))]);
+}
+function coverPut(key, val) { ART.mem.set(key, val); ART.saveQ.set(key, val); clearTimeout(ART.timer); ART.timer = setTimeout(flushCovers, 600); }
+function flushCovers() {
+  if (!ART.saveQ.size) return;
+  if (!ART.db) { if (ART.ready) ART.ready.then(() => ART.db && flushCovers()); return; }
+  try { const st = ART.db.transaction('c', 'readwrite').objectStore('c'); for (const [k, v] of ART.saveQ) st.put(v, k); ART.saveQ.clear(); } catch (e) {}
+}
+function clearCovers() {
+  ART.mem.clear(); ART.saveQ.clear();
+  try { if (ART.db) ART.db.transaction('c', 'readwrite').objectStore('c').clear(); } catch (e) {}
+}
+const fileRev = path => { const e = IDX.files[(path || '').toLowerCase()]; return e ? e[2] : ''; };
+const thumbKey = (path, size) => 't|' + size + '|' + path.toLowerCase() + '|' + fileRev(path);
+function firstFlac(al) { return al.tracks.map(k => LIB.tracks.get(k)).find(t => t && t.ext === 'flac') || null; }
+const embKey = al => { const t = firstFlac(al); return 'e|' + al.key + '|' + (t ? fileRev(t.file) : ''); };
+const noPicKey = al => 'n|' + embKey(al).slice(2);
+function cachedThumb(path, size) {   // la miniatura già pronta, anche di un'altra misura
+  for (const sz of [size, 'w256h256', 'w128h128']) {
+    const v = thumbCache.get(sz + '|' + path) || ART.mem.get(thumbKey(path, sz));
+    if (v) return v;
+  }
+  return null;
+}
+function applyCachedEmbedded() {     // copertine incorporate e album senza copertina, dalle aperture precedenti
+  for (const al of LIB.albums.values()) {
+    if (al.img || embeddedArt.has(al.key)) continue;
+    const v = ART.mem.get(embKey(al));
+    if (v) embeddedArt.set(al.key, v);
+    else if (ART.mem.get(noPicKey(al))) noPic.add(al.key);
+  }
+}
+function shrinkToDataUrl(url, max = 800) {
+  return new Promise(res => {
+    const im = new Image();
+    im.onload = () => {
+      try {
+        const k = Math.min(1, max / Math.max(im.naturalWidth || 1, im.naturalHeight || 1));
+        const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.naturalWidth * k)); c.height = Math.max(1, Math.round(im.naturalHeight * k));
+        c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', 0.85));
+      } catch (e) { res(null); }
+    };
+    im.onerror = () => res(null); im.src = url;
+  });
+}
+function prefetchCovers() {          // in sottofondo: tutte le copertine, così la prossima apertura è immediata
+  for (const al of LIB.albums.values()) {
+    if (al.img) { if (!cachedThumb(al.img, 'w256h256')) thumb(al.img, 'w256h256').catch(() => {}); }
+    else if (!embeddedArt.has(al.key) && !noPic.has(al.key)) loadEmbeddedCover(al.key);
+  }
 }
 
 /* ---------------- copertine (miniature generate da Dropbox) ---------------- */
@@ -875,6 +953,8 @@ let thumbQ = [], thumbTimer = null;
 function thumb(path, size = 'w256h256') {
   const key = size + '|' + path;
   if (thumbCache.has(key)) return Promise.resolve(thumbCache.get(key));
+  const saved = ART.mem.get(thumbKey(path, size));
+  if (saved) { thumbCache.set(key, saved); return Promise.resolve(saved); }
   if (thumbWait.has(key)) return thumbWait.get(key).p;
   let res, rej; const p = new Promise((a, b) => { res = a; rej = b; });
   thumbWait.set(key, { p, res, rej }); thumbQ.push({ key, path, size });
@@ -894,6 +974,7 @@ async function flushThumbs() {
         const url = 'data:image/jpeg;base64,' + en.thumbnail;
         thumbCache.set(b.key, url);
         if (thumbCache.size > 700) thumbCache.delete(thumbCache.keys().next().value);
+        if (b.size !== 'w960h640') coverPut(thumbKey(b.path, b.size), url);     // le grandi del lettore non le salvo
         settle(b, true, url);
       } else settle(b, false, new Error('miniatura non disponibile'));
     });
@@ -920,7 +1001,7 @@ function pumpEmb() {
   while (embRunning < 2 && embQueue.length) {
     const [albumKey, t] = embQueue.shift(); embRunning++;
     readFlacMeta(t.file, true)
-      .then(m => { storeTags(t, m); if (m.pic) setEmbeddedArt(albumKey, m.pic); else noPic.add(albumKey); })
+      .then(m => { storeTags(t, m); if (m.pic) setEmbeddedArt(albumKey, m.pic); else { noPic.add(albumKey); const al = LIB.albums.get(albumKey); if (al) coverPut(noPicKey(al), 1); } })
       .catch(() => {})
       .finally(() => { embRunning--; embWait.delete(albumKey); pumpEmb(); });
   }
@@ -931,7 +1012,7 @@ const ioEmb = 'IntersectionObserver' in window ? new IntersectionObserver(ents =
 function artEl({ img, name, size = 'w256h256', cls = '', style = '', albumKey = null }) {
   const e = h('div', { class: 'art ' + cls, style: `background:${colorFor(name)};${style}`, 'aria-hidden': 'true' }, h('span', null, initial(name)));
   if (albumKey) e.dataset.album = albumKey;
-  if (img) { e.dataset.img = img; e.dataset.size = size; io ? io.observe(e) : loadArt(e); }
+  if (img) { e.dataset.img = img; e.dataset.size = size; const c = cachedThumb(img, size); if (c) setArtImg(e, c); if (!c || c !== thumbCache.get(size + '|' + img) && !ART.mem.get(thumbKey(img, size))) io ? io.observe(e) : loadArt(e); }
   else if (albumKey && embeddedArt.has(albumKey)) setArtImg(e, embeddedArt.get(albumKey));
   else if (albumKey && ioEmb && linked()) ioEmb.observe(e);
   return e;
@@ -1564,7 +1645,7 @@ function updateNowPlaying() {
   for (const [id, size] of [['miniArt', 'w128h128'], ['pArt', 'w960h640']]) {
     const box = $(id), k = al ? al.key : t.lower;
     if (box.dataset.k !== k) { box.dataset.k = k; box.style.background = colorFor(al ? al.title : info.title); box.replaceChildren(h('span', null, initial(al ? al.title : info.title))); if (id === 'pArt') tintFromColor(colorFor(al ? al.title : info.title)); }
-    if (al && al.img) thumb(al.img, size).then(src => { if (curTrack() === t) setArtImg(box, src); }).catch(() => {});
+    if (al && al.img) { const small = cachedThumb(al.img, size); if (small && !box.querySelector('img')) setArtImg(box, small); thumb(al.img, size).then(src => { if (curTrack() === t) setArtImg(box, src); }).catch(() => {}); }
     else if (al && embeddedArt.has(al.key)) setArtImg(box, embeddedArt.get(al.key));
   }
   setPP(); updateModes(); updateProgress(); markNowPlaying(); renderQueue(); updateMediaSession();
@@ -2394,6 +2475,10 @@ function viewSettings() {
         h('button', { class: 'btn sec', onclick: () => { TAGS = {}; AMETA = {}; CUES = {}; [K.tags, K.ameta, K.cues].forEach(k => store(k, null)); embeddedArt.clear(); noPic.clear(); syncIndex(true); } }, 'Ricostruisci da zero'))),
     h('div', { class: 'box', 'data-eq-host': '' }, eqPanel()),
     udBox(),
+    h('div', { class: 'box' }, h('div', { class: 'eq' },
+      h('div', { class: 'between' }, h('strong', null, 'Copertine sul dispositivo'),
+        h('button', { class: 'btn sec', onclick: e => { clearCovers(); e.target.closest('.box').querySelector('p').textContent = 'Nessuna copertina salvata'; toast('Copertine cancellate'); } }, 'Cancella')),
+      h('p', { class: 'small mut' }, ART.mem.size ? `${plural([...ART.mem.keys()].filter(k => !k.startsWith('n|')).length, 'copertina salvata', 'copertine salvate')}: all'apertura si vedono subito. Sono solo immagini piccole; la musica non viene salvata.` : 'Nessuna copertina salvata'))),
     autoResumeBox(),
     preloadBox(),
     h('div', { class: 'box' }, h('h2', null, 'Come copiare la musica'),
@@ -2453,9 +2538,10 @@ $('pEq').classList.toggle('on', EQ.on);
   try { ['mx_news', 'mx_news_v1', 'mx_index_v2', 'mx_ameta_v1'].forEach(k => localStorage.removeItem(k)); } catch (e) {}   // novità da MusicBrainz tolte nella v1.11
   log(`App aperta ${isStandalone() ? 'dalla schermata Home' : 'nel browser'} · v${VERSION}`);
   try { await handleRedirect(); } catch (e) { bootError = 'Errore nel collegamento: ' + e.message; }
-  buildLib();
+  await loadCoverCache();
+  buildLib(); applyCachedEmbedded();
   render();
-  if (linked()) { restoreResumeIfNeeded(); setTimeout(syncUD, 2500); await syncIndex(); }
+  if (linked()) { restoreResumeIfNeeded(); setTimeout(syncUD, 2500); await syncIndex(); applyCachedEmbedded(); setTimeout(prefetchCovers, 3000); }
 })();
 </script>
 </body>
