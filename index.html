@@ -176,7 +176,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.8';
+const VERSION = '1.8.1';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -937,6 +937,7 @@ function loadSpare(t) {
   SP = { file: f, t0: performance.now() };
 }
 function prepareSpare() {           // durante la riproduzione: il successivo, appena il brano attuale è partito da 1 s
+  if (isHidden()) return;            // a schermo spento non serve: non lo carico né lo svuoto, per non disturbare iOS
   if (!preloadOn()) { clearSpare(); return; }
   const t = curTrack(); if (!t) return;
   const nt = nextTrack();
@@ -1180,7 +1181,8 @@ function bindAudio(el) {
   on('pause', () => {
     setPP(); saveResume(true);
     if (audio.getAttribute('src') && audio.readyState > 0 && !audio.ended && actBy !== 'fine della coda') {
-      log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}`); pausedLogged = true;
+      const det = actBy ? '' : ` · ${curBlob ? 'dalla memoria' : 'streaming'} a ${fmtTime(relTime())} · rete ${audio.networkState} · dati ${audio.readyState}${audio.error ? ' · errore ' + audio.error.code : ''}${ac ? ' · motore «' + ac.state + '»' : ''}${PRE ? ' · precarico ' + (PRE.ready ? 'pronto' : 'in corso') : ''}`;
+      log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}${det}`); pausedLogged = true;
       sysPause = actBy ? 0 : Date.now();
     }
     actBy = null;
@@ -1209,6 +1211,7 @@ function bindAudio(el) {
     if (isHidden()) pendingAuto = Date.now();
     autoNext = true; try { loadAndPlay(n); } finally { autoNext = false; }
   });
+  on('stalled', () => { if (isHidden() && !audio.paused) log('Dati fermi dalla rete (stalled) a schermo spento'); });
   on('error', () => {
     if (!audio.getAttribute('src')) return;
     const t = curTrack(); const code = audio.error ? audio.error.code : 0;
@@ -1230,6 +1233,7 @@ document.addEventListener('visibilitychange', () => {
   const music = () => audio.paused ? 'musica in pausa' : 'musica in riproduzione';
   if (isHidden()) { lastBeat = Date.now(); saveResume(true); if (ac) log(`Schermo spento con equalizzatore: motore audio «${ac.state}», ${music()}`); }
   else if (ac) { log(`Schermo acceso: motore audio «${ac.state}», ${music()}`); if (!audio.paused) eqWake(); }
+  if (!isHidden()) prepareSpare();     // riacceso lo schermo, preparo subito il successivo
   if (!isHidden() && pendingAuto) setTimeout(() => { if (pendingAuto && audio.paused) { log('✗ A schermo spento la musica si è fermata a fine brano'); pendingAuto = null; } }, 2000);
 });
 
