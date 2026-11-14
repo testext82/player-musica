@@ -25,7 +25,14 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.13)
+## Funzioni (v1.14)
+
+Mix da un brano, un album o un artista («Avvia un mix da qui»): stesso artista (al massimo 40%), artisti ascoltati
+negli stessi momenti, stesso genere, preferiti. Playlist automatiche: I più ascoltati del mese, Mai ascoltati,
+Riscoperte, Hi-res, Ultimi arrivati. La coda si può salvare come playlist. Lo sfondo del lettore prende il colore
+della copertina. Icona per la schermata Home (manifest e apple-touch-icon): su iPhone l'app installata ha dati
+separati da Safari, quindi chiede di nuovo la chiave e il collegamento a Dropbox.
+
 
 AirPlay dal lettore (Safari). Coda modificabile: trascina dalla maniglia, togli un brano, svuota.
 Home: «Aggiunti di recente» (data di caricamento su Dropbox). Libreria: ordina per nome, artista,
