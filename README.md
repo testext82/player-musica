@@ -7,8 +7,12 @@ Player web personale che ascolta in streaming FLAC e altri formati audio dalla *
 - Facoltativo: `files.content.write`, solo per salvare preferiti, playlist e ascolti in un unico file,
   `/_player/dati.json`, nella cartella dell'app. Il player non scrive né cancella nient'altro: la musica non viene toccata.
   Senza questo permesso i dati restano solo sul dispositivo.
+- Novità dai tuoi artisti (disattivabile in Impostazioni): una volta a settimana la pagina chiede a
+  MusicBrainz (`musicbrainz.org`, archivio aperto della MetaBrainz Foundation, non profit) le uscite
+  dell'ultimo anno degli artisti della libreria. MusicBrainz riceve solo i nomi degli artisti e l'indirizzo IP,
+  senza referrer né cookie; una richiesta ogni 1,2 s come chiede il servizio. Nessuna copertina da altri siti.
 - Login OAuth PKCE senza server: il permesso resta nel browser del dispositivo, nel codice non c'è nessun segreto.
-- La pagina può comunicare solo con Dropbox (Content-Security-Policy). Nessun font, script o servizio esterno. L'unica altra sorgente audio ammessa è `blob:`, cioè i brani precaricati in memoria.
+- La pagina può comunicare solo con Dropbox e, per le novità, con musicbrainz.org (Content-Security-Policy). Nessun font, script o servizio esterno. L'unica altra sorgente audio ammessa è `blob:`, cioè i brani precaricati in memoria.
 - I brani non vengono salvati: vengono letti in streaming tramite link temporanei di Dropbox.
 
 ## Organizzazione delle cartelle
@@ -25,7 +29,11 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.9)
+## Funzioni (v1.10)
+
+Novità dai tuoi artisti in Home (da MusicBrainz): album, EP e singoli dell'ultimo anno e in uscita,
+con il segno «In libreria» se l'album ce l'hai già; «Vedi tutte» apre l'elenco completo.
+
 
 Home: «Il tuo mix» (rifatto a ogni apertura della Home, simile agli ultimi ascolti: artisti e album
 ascoltati di recente, preferiti, brani mai sentiti, massimo 4 brani per album), album ascoltati di

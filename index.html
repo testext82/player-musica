@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <!-- La pagina può comunicare solo con Dropbox: nessun altro server riceve dati -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; media-src https://*.dropboxusercontent.com blob:; img-src data: blob: https://*.dropboxusercontent.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org; media-src https://*.dropboxusercontent.com blob:; img-src data: blob: https://*.dropboxusercontent.com; base-uri 'none'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Musica">
@@ -131,6 +131,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 .mixart .art{width:100%;height:100%;border-radius:0;font-size:14px}
 .icobox{width:48px;height:48px;border-radius:6px;background:var(--surf2);display:flex;align-items:center;justify-content:center;color:var(--acc);flex:none}
 .ibtn.on[data-fav]{color:var(--acc)}
+a.item{color:inherit;text-decoration:none}
 .note{background:var(--surf2);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--mut);line-height:1.45}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-1px;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -196,7 +197,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.9';
+const VERSION = '1.10';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -205,7 +206,7 @@ const SCOPES = 'files.metadata.read files.content.read';
 const WRITE_SCOPE = 'files.content.write';      // solo per salvare /_player/dati.json (preferiti e playlist)
 const REDIRECT_URI = location.origin + location.pathname;
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
-const K = { user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
+const K = { news: 'mx_news', newsCache: 'mx_news_v1', user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
             index: 'mx_index_v2', tags: 'mx_tags_v1', ameta: 'mx_ameta_v1', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', preload: 'mx_preload' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
 
@@ -1809,7 +1810,7 @@ function trackMenu(t, ctx = {}) {
 /* viste: Home, preferiti, playlist, mix */
 function prevLabel() {
   const p = NAV[NAV.length - 2]; if (!p) return 'Home';
-  const fixed = { home: 'Home', lib: 'Libreria', search: 'Cerca', settings: 'Impostazioni', favTracks: 'Brani preferiti', favAlbums: 'Album preferiti', favArtists: 'Artisti preferiti', mix: 'Il tuo mix' }[p.v];
+  const fixed = { home: 'Home', lib: 'Libreria', search: 'Cerca', settings: 'Impostazioni', favTracks: 'Brani preferiti', favAlbums: 'Album preferiti', favArtists: 'Artisti preferiti', mix: 'Il tuo mix', news: 'Novità' }[p.v];
   if (fixed) return fixed;
   if (p.v === 'artist' && LIB.artists.get(p.key)) return LIB.artists.get(p.key).name;
   if (p.v === 'album' && LIB.albums.get(p.key)) return LIB.albums.get(p.key).title;
@@ -1850,6 +1851,7 @@ function viewHome() {
       h('button', { class: 'pill sec', html: ic('refresh', 18) + 'Nuovo mix', onclick: () => { makeMix(); refreshViews(); } }))));
   const rec = recentAlbums(12);
   if (rec.length) nodes.push(h('div', { class: 'sec-h' }, 'Ascoltati di recente'), h('div', { class: 'hrow' }, ...rec.map(al => albumCard(al, true))));
+  nodes.push(...newsSection());
   const nT = favList('t:').filter(k => LIB.tracks.has(k)).length, nA = favList('a:').filter(k => LIB.albums.has(k)).length, nR = favList('r:').filter(k => LIB.artists.has(k)).length;
   nodes.push(h('div', { class: 'sec-h' }, 'Preferiti'),
     navRow('heart', 'Brani preferiti', plural(nT, 'brano', 'brani'), () => go({ v: 'favTracks' })),
@@ -1931,6 +1933,152 @@ function udBox() {
   draw(); udBoxDraw = draw; return box;
 }
 
+/* ---------------- novità dai tuoi artisti (MusicBrainz) ----------------
+   Le richieste portano solo il nome dell'artista (o il suo codice MusicBrainz): niente file, niente Dropbox, niente ascolti.
+   Una richiesta ogni 1,2 s come chiede MusicBrainz, una volta a settimana; i risultati restano sul dispositivo. */
+const MB = 'https://musicbrainz.org/ws/2/';
+const NEWS_EVERY = 7 * 864e5, NEWS_DAYS = 365;
+let MB_GAP = 1200, mbLast = 0;
+const newsOn = () => load(K.news) !== 'off';
+let NEWS = loadJSON(K.newsCache) || { t: 0, ar: {} };
+if (!NEWS.ar) NEWS = { t: 0, ar: {} };
+let newsRunning = false, newsProgress = '', newsError = '', newsErrT = 0;
+const nName = s => norm(s).replace(/^the\s+/, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const mbWait = ms => new Promise(r => setTimeout(r, ms));
+async function mbGet(path) {
+  for (let i = 0; i < 3; i++) {
+    const gap = MB_GAP - (Date.now() - mbLast); if (gap > 0) await mbWait(gap);
+    mbLast = Date.now();
+    const r = await fetch(MB + path, { referrerPolicy: 'no-referrer', credentials: 'omit', headers: { 'Accept': 'application/json' } });
+    if (r.status === 503 || r.status === 429) { await mbWait(3000 * (i + 1)); continue; }
+    if (!r.ok) throw new Error('risposta ' + r.status);
+    return r.json();
+  }
+  throw new Error('MusicBrainz è occupato, riprovo più tardi');
+}
+function newsArtists() {
+  return [...LIB.artists.values()].filter(a => !a.key.startsWith('~') && !/^(varie|various( artists)?|artisti vari|aa\.?\s*vv\.?|va)$/i.test(a.name.trim()));
+}
+const newsStale = c => !c || !c.t || Date.now() - c.t > NEWS_EVERY;
+async function mbFindArtist(a) {
+  const j = await mbGet(`artist/?query=${encodeURIComponent('artist:"' + a.name.replace(/["\\]/g, ' ') + '"')}&limit=5&fmt=json`);
+  const want = nName(a.name), list = j.artists || [];
+  const same = list.find(x => (x.score || 0) >= 80 && (nName(x.name) === want || (x.aliases || []).some(al => nName(al.name) === want)));
+  const hit = same || (list[0] && list[0].score === 100 ? list[0] : null);
+  return hit ? hit.id : null;
+}
+async function mbRecent(id) {
+  const since = new Date(Date.now() - NEWS_DAYS * 864e5).toISOString().slice(0, 10);
+  let groups;
+  try {
+    const j = await mbGet(`release-group/?query=${encodeURIComponent(`arid:${id} AND firstreleasedate:[${since} TO 2099-12-31]`)}&limit=50&fmt=json`);
+    groups = j['release-groups'] || [];
+  } catch (e) {                                   // ricerca non disponibile: elenco completo dell'artista
+    const j = await mbGet(`release-group?artist=${id}&limit=100&fmt=json`);
+    groups = j['release-groups'] || [];
+  }
+  return groups.filter(g => (g['first-release-date'] || '') >= since)
+    .map(g => ({ id: g.id, title: g.title, date: g['first-release-date'], type: g['primary-type'] || '', sec: g['secondary-types'] || [] }));
+}
+function needsNews() { return newsOn() && linked() && Date.now() - newsErrT > 30 * 60000 && newsArtists().some(a => newsStale(NEWS.ar[a.key])); }
+async function runNews(force) {
+  if (newsRunning || !newsOn() || !LIB.artists.size) return;
+  if (!force && Date.now() - newsErrT < 30 * 60000) return;      // dopo un errore aspetto mezz'ora prima di riprovare da solo
+  const list = newsArtists().filter(a => force || newsStale(NEWS.ar[a.key]));
+  if (!list.length) return;
+  newsRunning = true; newsError = ''; let done = 0;
+  try {
+    for (const a of list) {
+      if (!newsOn()) break;
+      newsProgress = `${done + 1} di ${list.length}`; updateNewsUI();
+      const c = NEWS.ar[a.key] || {};
+      try {
+        if (c.id === undefined || (c.id === null && Date.now() - (c.idT || 0) > 30 * 864e5)) { c.id = await mbFindArtist(a); c.idT = Date.now(); }
+        c.rel = c.id ? await mbRecent(c.id) : [];
+        c.t = Date.now(); NEWS.ar[a.key] = c; saveJSON(K.newsCache, NEWS); done++;
+      } catch (e) {
+        if (e instanceof TypeError || /occupato/.test(e.message)) { newsError = 'MusicBrainz non raggiungibile: riprovo più tardi'; newsErrT = Date.now(); log('Novità: ' + newsError); break; }
+        log(`Novità di «${a.name}» non lette: ${e.message}`); c.t = Date.now(); NEWS.ar[a.key] = c;
+      }
+    }
+    NEWS.t = Date.now(); saveJSON(K.newsCache, NEWS);
+    if (done) log(`Novità aggiornate da MusicBrainz: ${done} artisti controllati, ${newsItems().length} uscite`);
+  } finally { newsRunning = false; newsProgress = ''; updateNewsUI(); }
+}
+const TYPE_IT = { Album: 'Album', EP: 'EP', Single: 'Singolo', Broadcast: 'Trasmissione', Other: 'Altro' };
+const SEC_IT = { Live: 'dal vivo', Compilation: 'raccolta', Remix: 'remix', Soundtrack: 'colonna sonora', Demo: 'demo', 'DJ-mix': 'DJ mix', 'Mixtape/Street': 'mixtape', Interview: 'intervista', Spokenword: 'parlato', Audiobook: 'audiolibro' };
+function relKind(r) { return [TYPE_IT[r.type] || r.type || 'Uscita', ...r.sec.map(s => SEC_IT[s] || s.toLowerCase())].join(' · '); }
+function relDate(d) {
+  if (!d) return '';
+  const p = d.split('-').map(Number);
+  if (p.length === 1) return String(p[0]);
+  const dt = new Date(p[0], (p[1] || 1) - 1, p[2] || 1);
+  return dt.toLocaleDateString('it-IT', p.length === 2 ? { month: 'long', year: 'numeric' } : { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function newsItems() {
+  const today = new Date().toISOString().slice(0, 10), seen = new Set(), out = [];
+  for (const [ak, c] of Object.entries(NEWS.ar)) {
+    const a = LIB.artists.get(ak); if (!a || !c || !c.rel) continue;
+    const owned = new Set(a.albums.map(k => LIB.albums.get(k)).filter(Boolean).map(al => nName(al.title)));
+    for (const r of c.rel) {
+      if (seen.has(r.id)) continue; seen.add(r.id);
+      out.push(Object.assign({ ak, artist: a.name, owned: owned.has(nName(r.title)), soon: r.date > today }, r));
+    }
+  }
+  return out.sort((x, y) => (y.soon - x.soon) || (x.soon ? x.date.localeCompare(y.date) : y.date.localeCompare(x.date)));
+}
+function newsRow(it) {
+  const a = LIB.artists.get(it.ak);
+  return h('a', { class: 'item', href: 'https://musicbrainz.org/release-group/' + it.id, target: '_blank', rel: 'noopener noreferrer' },
+    a ? artistArt(a, 'w128h128', 'width:48px;height:48px;font-size:20px') : h('span', { class: 'icobox', html: ic('disc', 22) }),
+    h('span', { class: 'txt' }, h('span', { class: 't1' }, it.title),
+      h('span', { class: 't2' }, [it.artist, relKind(it), relDate(it.date)].filter(Boolean).join(' · '))),
+    it.soon ? h('span', { class: 'badge' }, 'In uscita') : it.owned ? h('span', { class: 'badge', style: 'border-color:var(--line);color:var(--mut)' }, 'In libreria') : null);
+}
+function newsStatus() {
+  if (newsRunning) return `Cerco le novità dei tuoi artisti su MusicBrainz… (${newsProgress})`;
+  if (newsError) return newsError;
+  return NEWS.t ? 'Da MusicBrainz · aggiornate il ' + new Date(NEWS.t).toLocaleDateString('it-IT', { day: 'numeric', month: 'long' }) : '';
+}
+function newsSection() {
+  if (!newsOn()) return [];
+  const items = newsItems();
+  if (needsNews() && !newsRunning) setTimeout(() => runNews(false), 800);
+  const head = h('div', { class: 'between', style: 'margin:24px 0 4px' }, h('div', { class: 'sec-h', style: 'margin:0' }, 'Novità dai tuoi artisti'),
+    items.length > 5 ? h('button', { class: 'small', style: 'color:var(--acc);font-weight:600;padding:8px 0', onclick: () => go({ v: 'news' }) }, 'Vedi tutte') : null);
+  const st = h('div', { id: 'newsStatus', class: 'small mut', style: 'margin-bottom:4px' }, newsStatus());
+  if (!items.length) return [head, st, newsRunning || needsNews() ? null : h('div', { class: 'small mut' }, 'Nessuna uscita nell\'ultimo anno per gli artisti della tua libreria.')];
+  return [head, st, ...items.slice(0, 5).map(newsRow)];
+}
+function viewNews() {
+  const items = newsItems(), soon = items.filter(i => i.soon), past = items.filter(i => !i.soon);
+  return [backBtnLabeled(prevLabel()), h('h1', { style: 'margin-top:6px' }, 'Novità'),
+    h('div', { id: 'newsStatus', class: 'small mut', style: 'margin-top:6px' }, newsStatus()),
+    soon.length ? h('div', { class: 'sec-h' }, 'In uscita') : null, ...soon.map(newsRow),
+    past.length ? h('div', { class: 'sec-h' }, 'Ultimi 12 mesi') : null, ...past.map(newsRow),
+    items.length ? null : h('div', { class: 'empty' }, 'Nessuna uscita nell\'ultimo anno per gli artisti della tua libreria.'),
+    h('div', { class: 'small mut', style: 'margin-top:18px;line-height:1.5' }, 'Tocca un\'uscita per aprire la sua pagina su MusicBrainz.')];
+}
+let newsBoxDraw = null;
+function updateNewsUI() {
+  const st = $('newsStatus'); if (st) st.textContent = newsStatus();
+  if (!newsRunning && ['home', 'news'].includes(NAV[NAV.length - 1].v)) refreshViews();
+  if (newsBoxDraw) newsBoxDraw();
+}
+function newsBox() {
+  const box = h('div', { class: 'box' });
+  const draw = () => {
+    const on = newsOn();
+    box.replaceChildren(h('div', { class: 'eq' },
+      h('div', { class: 'between' }, h('strong', null, 'Novità dai tuoi artisti'),
+        h('button', { class: 'btn' + (on ? ' sec' : ''), onclick: () => { store(K.news, on ? 'off' : null); log('Novità da MusicBrainz ' + (on ? 'disattivate' : 'attivate')); draw(); if (!on) runNews(false); } }, on ? 'Disattiva' : 'Attiva')),
+      h('p', { class: 'small mut' }, 'Una volta a settimana il player chiede a MusicBrainz, archivio musicale aperto e senza scopo di lucro, le uscite recenti degli artisti della tua libreria. MusicBrainz riceve solo i nomi degli artisti e il tuo indirizzo IP, come quando visiti il suo sito: niente file, niente Dropbox, niente ascolti.'),
+      on ? h('p', { class: 'small mut' }, newsStatus() || 'Non ancora aggiornate') : null,
+      on ? h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: () => runNews(true) }, newsRunning ? 'Aggiornamento in corso…' : 'Aggiorna ora')) : null));
+  };
+  draw(); newsBoxDraw = draw; return box;
+}
+
 /* ---------------- viste ---------------- */
 function render() {
   const view = $('view'); const cur = NAV[NAV.length - 1];
@@ -1947,6 +2095,7 @@ function render() {
   else if (cur.v === 'favArtists') nodes.push(...viewFavArtists());
   else if (cur.v === 'playlist') nodes.push(...viewPlaylist(cur.id));
   else if (cur.v === 'mix') nodes.push(...viewMix());
+  else if (cur.v === 'news') nodes.push(...viewNews());
   else if (cur.v === 'artist') nodes.push(...viewArtist(cur.key));
   else if (cur.v === 'album') nodes.push(...viewAlbum(cur.key));
   else if (cur.v === 'search') nodes.push(...viewSearch());
@@ -2128,6 +2277,7 @@ function viewSettings() {
         h('button', { class: 'btn sec', onclick: () => { TAGS = {}; AMETA = {}; CUES = {}; [K.tags, K.ameta, K.cues].forEach(k => store(k, null)); embeddedArt.clear(); noPic.clear(); syncIndex(true); } }, 'Ricostruisci da zero'))),
     h('div', { class: 'box', 'data-eq-host': '' }, eqPanel()),
     udBox(),
+    newsBox(),
     autoResumeBox(),
     preloadBox(),
     h('div', { class: 'box' }, h('h2', null, 'Come copiare la musica'),
