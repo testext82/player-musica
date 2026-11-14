@@ -1,7 +1,7 @@
 {
-  "name": "Musica",
-  "short_name": "Musica",
-  "description": "Player personale per la musica nella cartella Dropbox",
+  "name": "Basalto",
+  "short_name": "Basalto",
+  "description": "Basalto: il player personale per la musica nella cartella Dropbox",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -9,7 +9,16 @@
   "theme_color": "#000000",
   "lang": "it",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
   ]
 }

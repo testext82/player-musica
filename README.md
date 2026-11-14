@@ -1,4 +1,4 @@
-# Musica
+# Basalto
 
 Player web personale che ascolta in streaming FLAC e altri formati audio dalla **cartella dell'app** su Dropbox.
 
@@ -25,7 +25,11 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.16)
+## Funzioni (v1.17)
+
+Nome dell'app: Basalto. All'apertura una schermata nera con il logo e il nome (almeno 1 s, al massimo 2,5 s)
+mentre il player carica copertine, libreria e indice aggiornato.
+
 
 Aggiornamenti: all'avvio e quando l'app torna in primo piano (al massimo ogni 10 minuti) la pagina legge
 `version.json` dal proprio sito; se c'è una versione nuova mostra «Aggiorna». `version.json` va tenuto
