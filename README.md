@@ -30,6 +30,31 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+Novità della v1.19:
+- **Interruttori** come quelli di iOS nelle Impostazioni, raccolti nel riquadro «Riproduzione».
+- **Volume uniforme** (ReplayGain): legge `REPLAYGAIN_ALBUM_GAIN/PEAK` e `REPLAYGAIN_TRACK_GAIN/PEAK` dai FLAC e applica
+  un guadagno fisso per album (o per brano) nel motore Web Audio, in virgola mobile: nessuna compressione, la dinamica
+  non cambia, non alza mai oltre il picco del file (al massimo +6 dB). Album senza dati: il valore mediano della libreria.
+  I tag si aggiungono per esempio con foobar2000 (ReplayGain › Scan as albums): l'audio non viene modificato.
+- **Senza pause tra i brani**: tra brani consecutivi dello stesso album il successivo, già in memoria nel secondo lettore,
+  parte qualche millesimo di secondo prima della fine (anticipo misurato e corretto a ogni passaggio). Se non parte in
+  tempo o iOS lo rifiuta resta il passaggio normale; dopo due rifiuti a schermo spento lo fa solo a schermo acceso.
+- **Valutazioni da 1 a 5 stelle** nel lettore e nel menu ⋯ del brano; si salvano in `dati.json` tra i preferiti
+  (chiave `s:`, così le versioni precedenti le conservano). Playlist automatiche «5 stelle» e «4 stelle e più»;
+  le stelle pesano nei mix.
+- **Booklet e immagini**: nella pagina dell'album, se la cartella contiene immagini, PDF, TIFF o BMP. Le immagini si
+  vedono nell'app (anteprime Dropbox da 2048 px, liberate alla chiusura; scorri, pizzica, doppio tocco); i PDF e
+  l'originale si aprono in una nuova scheda. L'indice (v2) comprende ora anche pdf/tif/bmp: alla prima apertura
+  la libreria viene riletta per intero una volta.
+- **Controllo libreria** (Impostazioni › Libreria): copertine mancanti, tag mancanti o diversi nello stesso album,
+  numerazione, album e brani doppi, qualità miste, album senza ReplayGain, copertine incorporate pesanti, file non
+  letti, formati, anno e genere. «Analizza tutti i brani» legge l'inizio di ogni FLAC (16–64 KB).
+- **Statistiche** (Home › I tuoi ascolti): 7 giorni, 30 giorni, 12 mesi, sempre; ascolti, tempo, artisti, album,
+  ascolti per giorno/mese e per ora, classifiche, dati della libreria. Oltre i 3000 ascolti i più vecchi restano come
+  riepilogo mensile in `dati.json` (`agg`), unito tra dispositivi senza contare due volte lo stesso ascolto.
+- I tag letti dai FLAC stanno ora in IndexedDB («mx_meta») invece che in localStorage (spostati alla prima apertura).
+
+
 Aggiornamenti: all'avvio e quando l'app torna in primo piano (al massimo ogni 10 minuti) la pagina legge
 `version.json` dal proprio sito; se c'è una versione nuova mostra «Aggiorna». `version.json` va tenuto
 allineato a `VERSION` in index.html a ogni rilascio. In Impostazioni: «Controlla aggiornamenti».
