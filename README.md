@@ -27,8 +27,7 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 
 ## Funzioni (v1.17)
 
-Nome dell'app: Basalto. All'apertura una schermata nera con il logo e il nome (almeno 1 s, al massimo 2,5 s)
-mentre il player carica copertine, libreria e indice aggiornato.
+Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
 Aggiornamenti: all'avvio e quando l'app torna in primo piano (al massimo ogni 10 minuti) la pagina legge
