@@ -8,7 +8,7 @@ Player web personale che ascolta in streaming FLAC e altri formati audio dalla *
   `/_player/dati.json`, nella cartella dell'app. Il player non scrive né cancella nient'altro: la musica non viene toccata.
   Senza questo permesso i dati restano solo sul dispositivo.
 - Login OAuth PKCE senza server: il permesso resta nel browser del dispositivo, nel codice non c'è nessun segreto.
-- La pagina può comunicare solo con Dropbox (Content-Security-Policy). Nessun font, script o servizio esterno. L'unica altra sorgente audio ammessa è `blob:`, cioè i brani precaricati in memoria.
+- La pagina può comunicare solo con Dropbox e con il proprio sito, per `version.json` (Content-Security-Policy). Nessun font, script o servizio esterno. L'unica altra sorgente audio ammessa è `blob:`, cioè i brani precaricati in memoria.
 - I brani non vengono salvati: vengono letti in streaming tramite link temporanei di Dropbox.
 
 ## Organizzazione delle cartelle
@@ -25,7 +25,12 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.15)
+## Funzioni (v1.16)
+
+Aggiornamenti: all'avvio e quando l'app torna in primo piano (al massimo ogni 10 minuti) la pagina legge
+`version.json` dal proprio sito; se c'è una versione nuova mostra «Aggiorna». `version.json` va tenuto
+allineato a `VERSION` in index.html a ogni rilascio. In Impostazioni: «Controlla aggiornamenti».
+
 
 Copertine salvate sul dispositivo (IndexedDB «mx_covers»): miniature fino a 256 px e copertine incorporate
 ridotte a 800 px, legate alla revisione del file su Dropbox. All'apertura si vedono subito; dopo l'avvio il

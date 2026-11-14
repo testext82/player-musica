@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <!-- La pagina può comunicare solo con Dropbox: nessun altro server riceve dati -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.dropboxapi.com https://content.dropboxapi.com; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Musica">
@@ -144,6 +144,9 @@ a.item{color:inherit;text-decoration:none}
 .libbar{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .libbar .qbtn{display:inline-flex;align-items:center;gap:6px}
 .qbtn.on{color:var(--acc)}
+.updbar{position:fixed;left:12px;right:12px;top:calc(var(--st) + 8px);z-index:45;max-width:616px;margin:0 auto;background:var(--acc);color:#04120b;border-radius:14px;padding:10px 10px 10px 16px;display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600}
+.updbar .go{background:#04120b;color:#fff;border-radius:10px;padding:8px 14px;font-weight:700;flex:none}
+.updbar .x{display:flex;flex:none;padding:6px;color:#04120b}
 .note{background:var(--surf2);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--mut);line-height:1.45}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-1px;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -210,7 +213,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.15';
+const VERSION = '1.16';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -219,7 +222,7 @@ const SCOPES = 'files.metadata.read files.content.read';
 const WRITE_SCOPE = 'files.content.write';      // solo per salvare /_player/dati.json (preferiti e playlist)
 const REDIRECT_URI = location.origin + location.pathname;
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
-const K = { user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
+const K = { updSkip: 'mx_upd_skip', user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
             index: 'mx_index_v3', tags: 'mx_tags_v1', ameta: 'mx_ameta_v2', libView: 'mx_libview', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', preload: 'mx_preload' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
 
@@ -1421,6 +1424,7 @@ document.addEventListener('visibilitychange', () => {
   else if (ac) { log(`Schermo acceso: motore audio «${ac.state}», ${music()}`); if (!audio.paused) eqWake(); }
   if (!isHidden()) prepareSpare();     // riacceso lo schermo, preparo subito il successivo
   if (!isHidden() && linked() && Date.now() - udLastSync > 60000) syncUD();     // modifiche fatte su un altro dispositivo
+  if (!isHidden()) checkUpdate();                                              // l'app tornata in primo piano: c'è una versione nuova?
   if (isHidden() && udDirty && canWrite()) syncUD();
   if (!isHidden() && pendingAuto) setTimeout(() => { if (pendingAuto && audio.paused) { log('✗ A schermo spento la musica si è fermata a fine brano'); pendingAuto = null; } }, 2000);
 });
@@ -2209,6 +2213,33 @@ function tintFromColor(css) {                                // copertina assent
   if (hx) { const n = parseInt(hx[1], 16); setPlayerTint([n >> 16, (n >> 8) & 255, n & 255]); }
 }
 
+/* ---------------- aggiornamenti dell'app ----------------
+   Legge version.json dal sito del player (stesso indirizzo, nessun altro servizio): se c'è una versione nuova
+   mostra un avviso con «Aggiorna», che ricarica la pagina e riparte dal punto in cui eri. */
+let updLast = 0, updSeen = '';
+const verNum = v => String(v || '').split('.').map(n => parseInt(n, 10) || 0);
+function verNewer(a, b) { const x = verNum(a), y = verNum(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; }
+async function checkUpdate(manual) {
+  if (manual !== true && Date.now() - updLast < 10 * 60000) return;
+  updLast = Date.now();
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('risposta ' + r.status);
+    const v = (await r.json()).version;
+    if (verNewer(v, VERSION)) { if (manual === true || v !== load(K.updSkip)) showUpdate(v); }
+    else if (manual === true) toast('Hai già l\'ultima versione (v' + VERSION + ')');
+  } catch (e) { if (manual === true) toast('Controllo non riuscito: riprova più tardi'); }
+}
+function showUpdate(v) {
+  if (updSeen === v && document.querySelector('.updbar')) return;
+  updSeen = v; document.querySelectorAll('.updbar').forEach(e => e.remove());
+  log('Disponibile la versione ' + v);
+  const bar = h('div', { class: 'updbar', role: 'status' }, h('span', { style: 'flex:1' }, `Nuova versione ${v} disponibile`),
+    h('button', { class: 'go', onclick: () => { saveResume(true); log('Aggiorno alla versione ' + v); location.reload(); } }, 'Aggiorna'),
+    h('button', { class: 'x', 'aria-label': 'Più tardi', html: ic('x', 18), onclick: () => { store(K.updSkip, v); bar.remove(); } }));
+  document.body.append(bar);
+}
+
 /* ---------------- viste ---------------- */
 function render() {
   const view = $('view'); const cur = NAV[NAV.length - 1];
@@ -2489,7 +2520,8 @@ function viewSettings() {
       logBox,
       h('div', { class: 'btnrow' }, copyBtn, h('button', { class: 'btn sec', onclick: () => { logLines = []; store(K.log, null); logBox.textContent = ''; } }, 'Svuota'),
         h('button', { class: 'btn sec', onclick: () => { if (confirm('Cambiare App key? Dovrai ricollegare Dropbox.')) { logout(); store(K.appKey, null); render(); } } }, 'Cambia App key')))),
-    h('p', { class: 'small mut', style: 'text-align:center;margin-top:24px' }, `Musica v${VERSION}`)];
+    h('p', { class: 'small mut', style: 'text-align:center;margin-top:24px' }, `Musica v${VERSION}`),
+    h('div', { style: 'text-align:center;margin-top:6px' }, h('button', { class: 'btn sec', onclick: () => checkUpdate(true) }, 'Controlla aggiornamenti'))];
 }
 
 /* ---------------- collegamenti dei controlli fissi ---------------- */
@@ -2541,6 +2573,7 @@ $('pEq').classList.toggle('on', EQ.on);
   await loadCoverCache();
   buildLib(); applyCachedEmbedded();
   render();
+  setTimeout(checkUpdate, 4000);
   if (linked()) { restoreResumeIfNeeded(); setTimeout(syncUD, 2500); await syncIndex(); applyCachedEmbedded(); setTimeout(prefetchCovers, 3000); }
 })();
 </script>
