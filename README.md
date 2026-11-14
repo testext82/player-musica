@@ -25,7 +25,12 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.12)
+## Funzioni (v1.13)
+
+AirPlay dal lettore (Safari). Coda modificabile: trascina dalla maniglia, togli un brano, svuota.
+Home: «Aggiunti di recente» (data di caricamento su Dropbox). Libreria: ordina per nome, artista,
+titolo, anno, aggiunti di recente, più ascoltati; filtra per qualità (hi-res / CD) e genere (dal tag GENRE).
+
 
 Pagina dell'artista: «Notizie» apre Google News sull'artista in una nuova scheda (link diretto, senza referrer;
 il player non contatta Google).
