@@ -284,7 +284,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.20';
+const VERSION = '1.21';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -581,6 +581,7 @@ const ICONS = {
   grip: '<line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/>',
   x: '<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>',
   check: '<polyline points="5 12.5 10 17.5 19 7"/>',
+  wiki: '<text x="12" y="18.5" font-size="19" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="Georgia,\'Times New Roman\',serif">W</text>',
   star: '<path d="M12 3.6l2.5 5.3 5.8.7-4.3 4 1.1 5.7L12 16.5l-5.1 2.8 1.1-5.7-4.3-4 5.8-.7z"/>',
   starOn: '<path d="M12 3.6l2.5 5.3 5.8.7-4.3 4 1.1 5.7L12 16.5l-5.1 2.8 1.1-5.7-4.3-4 5.8-.7z" fill="currentColor"/>',
   book: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v15H5.5A1.5 1.5 0 0 0 4 20.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v15h5.5a1.5 1.5 0 0 1 1.5 1.5z"/>',
@@ -3234,6 +3235,14 @@ function newsLink(a) {
     h('span', { class: 'txt' }, h('span', { class: 't1' }, 'Notizie'), h('span', { class: 't2' }, 'Su Google News, in una nuova scheda')),
     h('span', { class: 'mut', html: ic('external', 18), style: 'display:flex' }));
 }
+// Wikipedia in italiano: «go» apre direttamente la voce se il nome corrisponde, altrimenti i risultati della ricerca
+function wikiLink(a) {
+  const url = 'https://it.wikipedia.org/w/index.php?' + new URLSearchParams({ search: a.name, title: 'Speciale:Ricerca', go: 'Vai' }).toString();
+  return h('a', { class: 'item', href: url, target: '_blank', rel: 'noopener noreferrer' },
+    h('span', { class: 'icobox', html: ic('wiki', 22) }),
+    h('span', { class: 'txt' }, h('span', { class: 't1' }, 'Wikipedia'), h('span', { class: 't2' }, 'La voce in italiano, in una nuova scheda')),
+    h('span', { class: 'mut', html: ic('external', 18), style: 'display:flex' }));
+}
 function viewArtist(key) {
   const a = LIB.artists.get(key); if (!a) return [backBtnLabeled('Libreria'), h('div', { class: 'empty' }, 'Questo artista non è più nella libreria: probabilmente è stato riconosciuto con un altro nome.')];
   const all = a.albums.flatMap(k => LIB.albums.get(k).tracks);
@@ -3245,6 +3254,7 @@ function viewArtist(key) {
     h('button', { class: 'item', style: 'margin-top:14px', onclick: () => startSeedMix({ artistKey: a.key }, a.name) }, h('span', { class: 'icobox', html: ic('radio', 22) }),
       h('span', { class: 'txt' }, h('span', { class: 't1' }, 'Avvia un mix'), h('span', { class: 't2' }, 'Brani di ' + a.name + ' e di artisti affini')), chev()),
     newsLink(a),
+    wikiLink(a),
     h('div', { class: 'sec-h' }, 'Album'),
     h('div', { class: 'grid' }, ...a.albums.map(k => albumCard(LIB.albums.get(k), false)))];
 }

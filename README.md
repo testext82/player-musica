@@ -30,6 +30,8 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.21: nella pagina dell'artista, sotto «Notizie», il link alla voce di Wikipedia in italiano (nuova scheda, senza referrer; il player non contatta Wikipedia).
+
 v1.20: barra in basso (lettore ridotto e schede) e menu dal basso semitrasparenti con sfocatura; logo dell'app accanto al titolo «Impostazioni»; corretto il riquadro delle stelle nel menu ⋯ (era enorme).
 
 Novità della v1.19:
