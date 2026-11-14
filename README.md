@@ -3,7 +3,10 @@
 Player web personale che ascolta in streaming FLAC e altri formati audio dalla **cartella dell'app** su Dropbox.
 
 ## Privacy
-- Accesso Dropbox di tipo *App folder* e in sola lettura (`files.metadata.read`, `files.content.read`).
+- Accesso Dropbox di tipo *App folder* (solo la cartella dell'app), in lettura (`files.metadata.read`, `files.content.read`).
+- Facoltativo: `files.content.write`, solo per salvare preferiti, playlist e ascolti in un unico file,
+  `/_player/dati.json`, nella cartella dell'app. Il player non scrive né cancella nient'altro: la musica non viene toccata.
+  Senza questo permesso i dati restano solo sul dispositivo.
 - Login OAuth PKCE senza server: il permesso resta nel browser del dispositivo, nel codice non c'è nessun segreto.
 - La pagina può comunicare solo con Dropbox (Content-Security-Policy). Nessun font, script o servizio esterno. L'unica altra sorgente audio ammessa è `blob:`, cioè i brani precaricati in memoria.
 - I brani non vengono salvati: vengono letti in streaming tramite link temporanei di Dropbox.
@@ -22,7 +25,16 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 - Copertina: scelta tra le immagini dell'album (cover/folder/front, anche in Artwork, Covers, Scans), scartando retro, disco, booklet; in mancanza, quella incorporata nel FLAC.
 - Album in un file unico con `.cue`: i brani vengono ricavati dal `.cue` e la riproduzione passa da uno all'altro senza interruzioni.
 
-## Funzioni (v1.8)
+## Funzioni (v1.9)
+
+Home: «Il tuo mix» (rifatto a ogni apertura della Home, simile agli ultimi ascolti: artisti e album
+ascoltati di recente, preferiti, brani mai sentiti, massimo 4 brani per album), album ascoltati di
+recente, preferiti (brani, album, artisti) e playlist. Un ascolto conta dopo 30 secondi o metà brano.
+Menu ⋯ su ogni brano: preferiti, aggiungi a playlist, riproduci dopo, vai all'album o all'artista.
+Cuore nel lettore, nella pagina dell'album e dell'artista. Playlist: crea, rinomina, elimina, sposta
+e togli brani; il mix si può salvare come playlist. Con il permesso di scrittura i dati sono uguali
+su tutti i dispositivi (vince la modifica più recente, la cronologia si unisce).
+
 Libreria per artisti e album, ricerca, coda con riproduzione casuale e ripetizione, ±10 secondi,
 comandi sulla schermata di blocco (brano precedente/successivo), ripresa dal punto interrotto,
 aggiornamento incrementale della libreria, diagnostica in Impostazioni.
