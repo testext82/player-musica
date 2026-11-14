@@ -176,7 +176,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.8.1';
+const VERSION = '1.8.2';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -836,14 +836,45 @@ const io = 'IntersectionObserver' in window ? new IntersectionObserver(ents => {
 }, { rootMargin: '400px' }) : null;
 function setArtImg(e, src) { let im = e.querySelector('img'); if (!im) { im = h('img', { alt: '' }); e.append(im); } if (im.getAttribute('src') !== src) im.src = src; }
 async function loadArt(e) { try { setArtImg(e, await thumb(e.dataset.img, e.dataset.size)); } catch (_) {} }
+const embWait = new Set(); let embRunning = 0; const embQueue = [];
+function loadEmbeddedCover(albumKey) {
+  const al = LIB.albums.get(albumKey);
+  if (!al || al.img || embeddedArt.has(albumKey) || noPic.has(albumKey) || embWait.has(albumKey) || tagJobs.has(albumKey)) return;
+  const first = al.tracks.map(k => LIB.tracks.get(k)).find(t => t && t.ext === 'flac');
+  if (!first) { noPic.add(albumKey); return; }
+  embWait.add(albumKey); embQueue.push([albumKey, first]); pumpEmb();
+}
+function pumpEmb() {
+  while (embRunning < 2 && embQueue.length) {
+    const [albumKey, t] = embQueue.shift(); embRunning++;
+    readFlacMeta(t.file, true)
+      .then(m => { storeTags(t, m); if (m.pic) setEmbeddedArt(albumKey, m.pic); else noPic.add(albumKey); })
+      .catch(() => {})
+      .finally(() => { embRunning--; embWait.delete(albumKey); pumpEmb(); });
+  }
+}
+const ioEmb = 'IntersectionObserver' in window ? new IntersectionObserver(ents => {
+  for (const en of ents) if (en.isIntersecting) { ioEmb.unobserve(en.target); loadEmbeddedCover(en.target.dataset.album); }
+}, { rootMargin: '300px' }) : null;
 function artEl({ img, name, size = 'w256h256', cls = '', style = '', albumKey = null }) {
   const e = h('div', { class: 'art ' + cls, style: `background:${colorFor(name)};${style}`, 'aria-hidden': 'true' }, h('span', null, initial(name)));
   if (albumKey) e.dataset.album = albumKey;
   if (img) { e.dataset.img = img; e.dataset.size = size; io ? io.observe(e) : loadArt(e); }
   else if (albumKey && embeddedArt.has(albumKey)) setArtImg(e, embeddedArt.get(albumKey));
+  else if (albumKey && ioEmb && linked()) ioEmb.observe(e);
   return e;
 }
 function albumArt(al, size, cls, style) { return artEl({ img: al.img, name: al.title, size, cls, style, albumKey: al.key }); }
+// Artista: nel cerchio la copertina del suo album più recente (la lettera resta solo se non c'è nessuna copertina)
+function artistAlbum(a) {
+  const als = a.albums.map(k => LIB.albums.get(k)).filter(Boolean).sort((x, y) => String(y.year || '').localeCompare(String(x.year || '')));
+  return als.find(al => al.img || embeddedArt.has(al.key)) || als[0] || null;
+}
+function artistArt(a, size, style) {
+  if (a.img) return artEl({ img: a.img, name: a.name, size, cls: 'round', style });
+  const al = artistAlbum(a);
+  return artEl({ img: al && al.img, name: a.name, size, cls: 'round', style, albumKey: al ? al.key : null });
+}
 
 /* ---------------- link di streaming ---------------- */
 const linkCache = new Map();
@@ -1559,7 +1590,7 @@ function viewLib() {
   }
   if (LIBTAB === 'artisti') {
     nodes.push(h('div', { style: 'margin-top:6px' }, ...artists.map(a => h('button', { class: 'item', onclick: () => go({ v: 'artist', key: a.key }) },
-      artEl({ img: a.img, name: a.name, size: 'w128h128', cls: 'round', style: 'width:56px;height:56px;font-size:22px' }),
+      artistArt(a, 'w128h128', 'width:56px;height:56px;font-size:22px'),
       h('span', { class: 'txt' }, h('span', { class: 't1' }, a.name), h('span', { class: 't2' }, `${plural(a.albums.length, 'album', 'album')} · ${plural(a.count, 'brano', 'brani')}`)),
       h('span', { class: 'mut', html: ic('right', 20), style: 'display:flex' })))));
   } else {
@@ -1666,7 +1697,7 @@ function fillSearch(box) {
   for (const t of LIB.tracks.values()) { const i = trackInfo(t); if (match(i.title + ' ' + i.artist)) { tr.push(t); if (tr.length >= 50) break; } }
   const nodes = [];
   if (ar.length) nodes.push(h('div', { class: 'sec-h' }, 'Artisti'), ...ar.map(a => h('button', { class: 'item', onclick: () => go({ v: 'artist', key: a.key }) },
-    artEl({ img: a.img, name: a.name, size: 'w128h128', cls: 'round', style: 'width:48px;height:48px;font-size:20px' }), h('span', { class: 'txt' }, h('span', { class: 't1' }, a.name), h('span', { class: 't2' }, plural(a.count, 'brano', 'brani'))))));
+    artistArt(a, 'w128h128', 'width:48px;height:48px;font-size:20px'), h('span', { class: 'txt' }, h('span', { class: 't1' }, a.name), h('span', { class: 't2' }, plural(a.count, 'brano', 'brani'))))));
   if (al.length) nodes.push(h('div', { class: 'sec-h' }, 'Album'), ...al.map(a => h('button', { class: 'item', onclick: () => go({ v: 'album', key: a.key }) },
     albumArt(a, 'w128h128', '', 'width:48px;height:48px;border-radius:4px;font-size:20px'), h('span', { class: 'txt' }, h('span', { class: 't1' }, a.title), h('span', { class: 't2' }, [a.artistName, a.year].filter(Boolean).join(' · '))))));
   if (tr.length) nodes.push(h('div', { class: 'sec-h' }, 'Brani'), ...tr.map((t, i) => {
