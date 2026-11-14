@@ -131,6 +131,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 .mixart .art{width:100%;height:100%;border-radius:0;font-size:14px}
 .icobox{width:48px;height:48px;border-radius:6px;background:var(--surf2);display:flex;align-items:center;justify-content:center;color:var(--acc);flex:none}
 .ibtn.on[data-fav]{color:var(--acc)}
+a.item{color:inherit;text-decoration:none}
 .note{background:var(--surf2);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--mut);line-height:1.45}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-1px;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -196,7 +197,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 
 <script>
 'use strict';
-const VERSION = '1.11';
+const VERSION = '1.12';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -483,6 +484,8 @@ const ICONS = {
   user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/>',
   disc: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><polyline points="20 4 20 11 13 11"/>',
+  news: '<rect x="3.5" y="5" width="13" height="14" rx="1.5"/><path d="M16.5 9H19a1.5 1.5 0 0 1 1.5 1.5V17a2 2 0 0 1-4 0"/><line x1="6.5" y1="9" x2="13.5" y2="9"/><line x1="6.5" y1="12.5" x2="13.5" y2="12.5"/><line x1="6.5" y1="16" x2="11" y2="16"/>',
+  external: '<path d="M14 4h6v6"/><line x1="20" y1="4" x2="11" y2="13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   eq: '<rect x="4" y="10" width="3" height="10" rx="1" fill="currentColor" stroke="none"/><rect x="10.5" y="4" width="3" height="16" rx="1" fill="currentColor" stroke="none"/><rect x="17" y="13" width="3" height="7" rx="1" fill="currentColor" stroke="none"/>',
 };
 function ic(name, size = 24, sw = 2) {
@@ -2003,6 +2006,14 @@ function albumCard(al, showArtist) {
   return h('button', { class: 'card', onclick: () => go({ v: 'album', key: al.key }) }, albumArt(al, 'w256h256'),
     h('span', { class: 'txt' }, h('span', { class: 't1', style: 'font-size:15px' }, al.title), h('span', { class: 't2' }, [showArtist ? al.artistName : '', al.year].filter(Boolean).join(' · ') || plural(al.tracks.length, 'brano', 'brani'))));
 }
+// Notizie: apre Google News sull'artista in una nuova scheda (nessuna richiesta parte dal player; la fonte non viene indicata)
+function newsLink(a) {
+  const url = 'https://news.google.com/search?' + new URLSearchParams({ q: '"' + a.name + '"', hl: 'it', gl: 'IT', ceid: 'IT:it' }).toString();
+  return h('a', { class: 'item', href: url, target: '_blank', rel: 'noopener noreferrer', style: 'margin-top:14px' },
+    h('span', { class: 'icobox', html: ic('news', 22) }),
+    h('span', { class: 'txt' }, h('span', { class: 't1' }, 'Notizie'), h('span', { class: 't2' }, 'Su Google News, in una nuova scheda')),
+    h('span', { class: 'mut', html: ic('external', 18), style: 'display:flex' }));
+}
 function viewArtist(key) {
   const a = LIB.artists.get(key); if (!a) return [backBtnLabeled('Libreria'), h('div', { class: 'empty' }, 'Questo artista non è più nella libreria: probabilmente è stato riconosciuto con un altro nome.')];
   const all = a.albums.flatMap(k => LIB.albums.get(k).tracks);
@@ -2011,6 +2022,7 @@ function viewArtist(key) {
     h('h1', { style: 'margin-top:6px' }, a.name),
     h('div', { class: 'small mut', style: 'margin-top:6px' }, `${plural(a.albums.length, 'album', 'album')} · ${plural(a.count, 'brano', 'brani')}`),
     h('div', { class: 'btns', style: 'align-items:center' }, playBtn(all), shuffleBtn(all), favBtn('r:' + a.key)),
+    newsLink(a),
     h('div', { class: 'sec-h' }, 'Album'),
     h('div', { class: 'grid' }, ...a.albums.map(k => albumCard(LIB.albums.get(k), false)))];
 }
