@@ -30,6 +30,13 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.30: **batteria del Remix rifatta**.
+- L'analisi legge tutto il brano e trova ogni singolo battito (programmazione dinamica, con il tempo locale), quindi la batteria segue anche i brani suonati senza metronomo che accelerano o rallentano. Tarata su brani veri (confronto con madmom) e su brani sintetici a tempo variabile: battiti trovati tutti, scarto medio 2 ms.
+- **Aggancio al suono**: un piccolo modulo (`rx-ascolto.js`, AudioWorklet) ascolta la musica dentro il motore audio e la confronta con il file; la batteria si aggancia a quello che si sente davvero, non al contatore del lettore (su iPhone i due possono differire di decimi di secondo). Non registra niente: calcola solo l'inviluppo in 4 bande. Per caricarlo la CSP permette gli script dello stesso sito (`script-src 'self'`).
+- Tonalità e accordatura (anche brani accordati mezzo tono sotto): il basso suona intonato con il brano.
+- «× 2» e «÷ 2» raddoppiano o dimezzano i colpi; tempi alternativi proposti e «Tocca a tempo» rifanno i battiti con un altro tempo.
+- Corretto anche il contatore in Chrome dopo uno spostamento preciso di meno di 2 secondi.
+
 v1.29: toccando il brano già in memoria mentre è in pausa riparte dall'inizio e suona (prima restava fermo); nel registro anche le regolazioni della batteria del Remix (× 2, ÷ 2, ± 10 ms, battuta, tocco).
 
 v1.28: **Remix** (pulsante «Remix» nel lettore). Tutto avviene sul telefono mentre il brano suona; il file su Dropbox non cambia e per ora le impostazioni non vengono salvate.

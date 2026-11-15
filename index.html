@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <!-- La pagina comunica solo con Dropbox; con MusicBrainz soltanto quando chiedi «Album che non hai» (riceve il nome dell'artista) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Basalto">
@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.29';
+const VERSION = '1.30';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -338,7 +338,7 @@ const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviam
 const K = { updSkip: 'mx_upd_skip', user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
             index: 'mx_index_v3', tags: 'mx_tags_v1', ameta: 'mx_ameta_v2', libView: 'mx_libview', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', preload: 'mx_preload',
             rg: 'mx_rg_v1', gap: 'mx_gap', gapBg: 'mx_gap_bg', gapLead: 'mx_gap_lead', statsP: 'mx_stats_p', pseek: 'mx_pseek',
-            mb: 'mx_mb_v1', mbKind: 'mx_mb_kind', cont: 'mx_cont', theme: 'mx_theme', rhythm: 'mx_rhythm_v1' };
+            mb: 'mx_mb_v1', mbKind: 'mx_mb_kind', cont: 'mx_cont', theme: 'mx_theme', rhythm: 'mx_rhythm_v1', rxLag: 'mx_rx_lag' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
 
 /* ---------------- riconoscimento della libreria (funzioni pure) ---------------- */
@@ -1339,6 +1339,7 @@ function setSrcOn(el, l) {
   el._tail = null; el._off = 0; el._approx = false; clearTimeout(el._wd);
   if (ac || engineWanted()) el.crossOrigin = 'anonymous'; else el.removeAttribute('crossorigin'); el.src = l;
   applyRate(el);                                   // velocità del remix (si azzera a ogni nuovo file)
+  if (el === audio && RX.on && RX.drums.on) { rxSegReset(); DS.next = null; }   // nuovo file o «fetta»: la batteria si riaggancia
 }
 function setSrc(l) { srcPlayingAt = 0; setSrcOn(audio, l); }
 function clearSpare() { if (spare.getAttribute('src')) { spare.removeAttribute('src'); try { spare.load(); } catch (e) {} } SP = { file: null, t0: 0 }; }
@@ -1531,9 +1532,11 @@ function tailFailed(el, cb, why) {
 // Il browser conta il tempo dall'inizio della «fetta» o dall'inizio del file (i blocchi FLAC portano il loro numero)?
 function tailCheck() {
   const el = audio; if (!el._tail || !el._chk || el.readyState < 1) return;
-  if (performance.now() - el._chk > 8000) { el._chk = 0; return; }
-  if (el._off > 2 && el.currentTime > el._off - 0.5) { el._off = 0; el._chk = 0; if (!tailAbsLogged) { tailAbsLogged = true; log('Il browser indica il tempo dall\'inizio del file: correggo'); } }
-  else if (el.currentTime > 0.3) el._chk = 0;
+  const passed = (performance.now() - el._chk) / 1000 * (el.playbackRate || 1), ct = el.currentTime;
+  if (passed > 8) { el._chk = 0; return; }
+  // dal punto di partenza della «fetta» non può essere passato più tempo di quello trascorso: se il contatore è più avanti, conta dall'inizio del file
+  if (el._off > 0.25 && ct > passed + 0.15) { el._off = 0; el._chk = 0; if (!tailAbsLogged) { tailAbsLogged = true; log('Il browser indica il tempo dall\'inizio del file: correggo'); } }
+  else if (ct > 0.3 && ct < el._off - 0.1) el._chk = 0;
 }
 let tailAbsLogged = false;
 function markApprox() {
@@ -2150,7 +2153,10 @@ function audioSessionType(type) {
 }
 function attachEl(el) {
   if (!ac || ELG.has(el)) return;
-  try { const g = ac.createGain(); ac.createMediaElementSource(el).connect(g); g.connect(eqPre); ELG.set(el, g); }
+  try {
+    const g = ac.createGain(); ac.createMediaElementSource(el).connect(g); ELG.set(el, g);
+    if (window.__rxTestDelay) { const d = ac.createDelay(2); d.delayTime.value = window.__rxTestDelay; g.connect(d); d.connect(eqPre); } else g.connect(eqPre);   // solo per le prove automatiche
+  }
   catch (e) { log('Lettore non collegato al motore audio: ' + e.message); }
 }
 function ensureGraph() {
@@ -2207,7 +2213,7 @@ function dropEqEngine(keepPlaying) {
   old.pause(); old.removeAttribute('src'); try { old.load(); } catch (e) {} old.replaceWith(el);
   const oldSpare = spare; spare = makeSpare(); bindAudio(spare); oldSpare.removeAttribute('src'); try { oldSpare.load(); } catch (e) {} oldSpare.replaceWith(spare); SP = { file: null, t0: 0 };
   spareUnlocked = false;                   // il nuovo lettore di riserva va «sbloccato» dal prossimo tocco
-  clearInterval(DS.timer); DS.srcs = []; DS.next = null; DS.off = null; RXN = { all: [], srcs: [] }; fxIn = fxMaster = drumBus = bassBus = null; KIT = null;
+  clearInterval(DS.timer); DS.srcs = []; DS.next = null; DS.off = null; RXN = { all: [], srcs: [] }; rxUnlisten(); RXL.loading = false; fxIn = fxMaster = drumBus = bassBus = null; KIT = null;
   const ctx = ac; ac = null; eqFilters = []; eqPre = null; eqWired = null;
   ctx.onstatechange = null; ctx.close().catch(() => {});
   audioSessionType('auto');
@@ -2304,7 +2310,7 @@ const RX = {
   on: false, rate: 1, vinyl: false, semi: 0, preset: 'none',
   fx: { rev: { on: false, size: 0.5, mix: 0.35 }, echo: { on: false, div: '1/8', fb: 0.35, mix: 0.3 }, filt: { on: false, type: 'lp', freq: 0.35 },
         dist: { on: false, amt: 0.3 }, flang: { on: false, speed: 0.25, mix: 0.5 }, pan8: { on: false, speed: 0.15 } },
-  drums: { on: false, vol: 0.8, bassVol: 0.6, pattern: 'rock', grid: null, nudge: 0 },
+  drums: { on: false, vol: 0.8, bassVol: 0.6, pattern: 'rock', grid: null },
 };
 const RXROWS = [['kick', 'Cassa'], ['snare', 'Rullante'], ['hat', 'Charleston'], ['ohat', 'Charl. aperto'], ['clap', 'Mani'], ['tom', 'Tom'], ['bass', 'Basso']];
 const RXPAT = {
@@ -2413,9 +2419,250 @@ function pitchShifter(src, ratio, N) {
 }
 
 /* --- analisi del ritmo: tempo (BPM), battiti, primo battito della battuta e tonalità --- */
-const RHY = loadJSON(K.rhythm) || {};
-function rxBeat() { const t = curTrack(); if (!t) return null; const r = RHY[fileOf(t)]; return r && r.rev === t.rev && t.start == null ? r : null; }
-let rxAnalyzing = null, rxErr = '';
+/* ---------------- analisi del ritmo su tutto il brano ----------------
+   Il brano viene letto a pezzi (22050 Hz, mono). Per ogni centesimo di secondo calcolo quanto «cresce» lo spettro
+   (flusso spettrale): da lì il tempo medio e poi, con la programmazione dinamica (metodo di D. Ellis), la posizione
+   di ogni singolo battito, che segue il batterista anche quando accelera o rallenta.
+   Calcolo anche un secondo inviluppo, semplice, che si può rifare dal vivo sul suono che esce: serve ad agganciare
+   la batteria al punto che si sente davvero (vedi «aggancio dal vivo»). */
+const BT_FPS = 100;
+function btFft(re, im) {                 // FFT complessa sul posto (lunghezza potenza di 2)
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) { let b = n >> 1; for (; j & b; b >>= 1) j ^= b; j ^= b; if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang), h = len >> 1;
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < h; k++) {
+        const a = i + k, b = a + h, tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+        const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+      }
+    }
+  }
+}
+// inviluppo per l'aggancio dal vivo: crescita dell'energia in quattro bande (filtri a due poli, uguali a qualunque frequenza
+// di campionamento): è lo stesso calcolo del modulo rx-ascolto.js, così i due si possono confrontare
+const CAL_CUT = [150, 800, 3000];
+function calState(sr) { return { a: CAL_CUT.map(f => Math.exp(-2 * Math.PI * f / sr)), z: new Float64Array(6), prev: null }; }
+function calFrame(st, x, i0, i1, out, o) {   // campioni x[i0..i1) → 4 valori in out[o..o+4)
+  const a = st.a, z = st.z, e = [0, 0, 0, 0];
+  for (let i = i0; i < i1; i++) {
+    const v = x[i];
+    for (let b = 0; b < 3; b++) { z[2 * b] = a[b] * z[2 * b] + (1 - a[b]) * v; z[2 * b + 1] = a[b] * z[2 * b + 1] + (1 - a[b]) * z[2 * b]; }
+    const l0 = z[1], l1 = z[3], l2 = z[5], b1 = l1 - l0, b2 = l2 - l1, b3 = v - l2;
+    e[0] += l0 * l0; e[1] += b1 * b1; e[2] += b2 * b2; e[3] += b3 * b3;
+  }
+  const n = Math.max(1, i1 - i0), cur = e.map(v => Math.log(1e-10 + v / n));
+  for (let b = 0; b < 4; b++) { const d = st.prev ? cur[b] - st.prev[b] : 0; out[o + b] = d > 0 ? d : 0; }
+  st.prev = cur;
+}
+
+function btInit(total) {                  // total: durata del brano in secondi
+  const n = Math.ceil(total * BT_FPS) + 2, N = 1024, sr = 22050;
+  const win = new Float32Array(N); for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+  // bande logaritmiche (3 per ottava) da 30 Hz a 10 kHz; per ogni bin la sua banda e la sua nota
+  const bandOf = new Int16Array(N / 2).fill(-1), pcOf = new Int8Array(N / 2).fill(-1), edges = [];
+  for (let f = 30; f < 10000; f *= Math.pow(2, 1 / 3)) edges.push(f);
+  for (let k = 1; k < N / 2; k++) {
+    const f = k * sr / N; let b = -1; for (let j = 0; j < edges.length - 1; j++) if (f >= edges[j] && f < edges[j + 1]) { b = j; break; }
+    bandOf[k] = b; if (f >= 150 && f <= 2500) pcOf[k] = ((Math.round(12 * Math.log2(f / 440)) % 12) + 12 + 9) % 12;
+  }
+  const nb = edges.length - 1, lowB = edges.findIndex(f => f >= 150);
+  return { n, N, sr, win, bandOf, pcOf, nb, lowB, flux: new Float32Array(n), low: new Float32Array(n), mid: new Float32Array(n), cal: new Float32Array(n * 4),
+    chroma: new Float32Array(n * 12), prevL: null, cal0: calState(sr), calNext: 0, re: new Float32Array(N), im: new Float32Array(N), E: new Float64Array(nb),
+    key: { spec: new Float64Array(2048), cents: new Float64Array(100), N: 4096, win: null, next: 0 }, done: 0 };
+}
+// un pezzo di brano: x mono a st.sr, che inizia a «start» secondi; contano solo i fotogrammi in [from, to)
+function btChunk(st, x, start, from, to) {
+  const { N, sr, win, bandOf, pcOf, nb, lowB, re, im, E } = st, f0 = Math.max(0, Math.ceil(from * BT_FPS - 1e-9)), f1 = Math.min(st.n, Math.ceil(to * BT_FPS - 1e-9));
+  for (let f = f0; f < f1; f++) {
+    const c = Math.round((f / BT_FPS - start) * sr), s0 = c - N / 2;
+    re.fill(0); im.fill(0);
+    for (let i = 0; i < N; i++) { const j = s0 + i; re[i] = j >= 0 && j < x.length ? x[j] * win[i] : 0; }
+    btFft(re, im); E.fill(0); const ch = st.chroma.subarray(f * 12, f * 12 + 12);
+    for (let k = 1; k < N / 2; k++) { const p = (re[k] * re[k] + im[k] * im[k]) * 4 / (N * N); if (bandOf[k] >= 0) E[bandOf[k]] += p; if (pcOf[k] >= 0) ch[pcOf[k]] += Math.sqrt(p); }
+    const L = new Float32Array(nb); for (let b = 0; b < nb; b++) L[b] = Math.log(1e-9 + E[b]);
+    if (st.prevL) {
+      let s = 0, lo = 0, mi = 0;
+      for (let b = 0; b < nb; b++) { const d = L[b] - st.prevL[b]; if (d > 0) { s += d; if (b < lowB) lo += d; else if (b < lowB + 12) mi += d; } }
+      st.flux[f] = s / nb; st.low[f] = lo / Math.max(1, lowB); st.mid[f] = mi / 12;
+    }
+    st.prevL = L;
+  }
+  // inviluppo semplice: campioni da «from» a «to», a fotogrammi esatti di 10 ms
+  for (let f = Math.max(f0, st.calNext); f < f1; f++) {
+    const i0 = Math.max(0, Math.round((f / BT_FPS - start) * sr)), i1 = Math.min(x.length, Math.round(((f + 1) / BT_FPS - start) * sr));
+    if (i1 > i0) calFrame(st.cal0, x, i0, i1, st.cal, f * 4);
+    st.calNext = f + 1;
+  }
+  btKeyChunk(st.key, x, start, from, to, sr);
+  st.done = Math.max(st.done, f1);
+}
+// tonalità e accordatura: FFT lunghe ogni 0,2 s
+function btKeyChunk(K, x, start, from, to, sr) {
+  const N = K.N; if (!K.win) { K.win = new Float32Array(N); for (let i = 0; i < N; i++) K.win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N); }
+  const re = new Float32Array(N), im = new Float32Array(N), mag = new Float32Array(N / 2);
+  for (let t = Math.max(from, K.next); t + N / sr < to + 0.05; t += 0.2) {
+    const s0 = Math.round((t - start) * sr); if (s0 < 0 || s0 + N > x.length) { K.next = t + 0.2; continue; }
+    for (let i = 0; i < N; i++) { re[i] = x[s0 + i] * K.win[i]; im[i] = 0; }
+    btFft(re, im); for (let k = 0; k < N / 2; k++) mag[k] = Math.hypot(re[k], im[k]);
+    for (let k = 2; k < N / 2 - 1; k++) {
+      const f = k * sr / N; if (f < 80 || f > 2000) continue;
+      const m = mag[k]; if (m < mag[k - 1] || m < mag[k + 1]) continue;                // solo i picchi: per l'accordatura
+      const a = mag[k - 1], b = mag[k + 1], d = (a - b) / (2 * (a - 2 * m + b) || 1), fp = (k + Math.max(-0.5, Math.min(0.5, d))) * sr / N;
+      const cents = 1200 * Math.log2(fp / 440), dev = ((Math.round(cents) % 100) + 150) % 100;   // 0..99, 50 = intonato
+      K.cents[dev] += m;
+    }
+    for (let k = 1; k < N / 2; k++) { const f = k * sr / N; if (f < 55 || f > 2000) continue; K.spec[k] += mag[k]; }
+    K.next = t + 0.2;
+  }
+}
+function btKey(K, sr) {
+  // accordatura: media circolare dello scarto dai semitoni (in cent)
+  let sx = 0, sy = 0; for (let d = 0; d < 100; d++) { const a = 2 * Math.PI * (d - 50) / 100; sx += K.cents[d] * Math.cos(a); sy += K.cents[d] * Math.sin(a); }
+  const tune = Math.round(Math.atan2(sy, sx) / (2 * Math.PI) * 100);    // −50..+50 cent
+  const N = K.N, ch = new Float64Array(12);
+  for (let k = 1; k < N / 2; k++) { const v = K.spec[k]; if (!v) continue; const f = k * sr / N * Math.pow(2, -tune / 1200); ch[((Math.round(12 * Math.log2(f / 440)) % 12) + 12 + 9) % 12] += v; }
+  const MAJ = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88], MIN = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+  const corr = (a, b) => { const ma = a.reduce((s, v) => s + v, 0) / 12, mb = b.reduce((s, v) => s + v, 0) / 12; let n = 0, da = 0, db = 0; for (let i = 0; i < 12; i++) { n += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; db += (b[i] - mb) ** 2; } return n / Math.sqrt(da * db || 1); };
+  let best = { r: -2, root: 0, minor: false };
+  for (let r = 0; r < 12; r++) for (const [prof, minor] of [[MAJ, false], [MIN, true]]) {
+    const c = corr(Array.from(ch), Array.from({ length: 12 }, (_, i) => prof[(i - r + 12) % 12]));
+    if (c > best.r) best = { r: c, root: r, minor };
+  }
+  return { key: best.root, minor: best.minor, keyR: best.r, tune };
+}
+
+// inviluppo degli attacchi pronto per il tempo: tolgo la media mobile e normalizzo
+function btOnset(st) {
+  const n = st.done, on = new Float32Array(n), w = 40; let acc = 0;
+  for (let f = 0; f < n; f++) { acc += st.flux[f]; if (f >= w) acc -= st.flux[f - w]; on[f] = Math.max(0, st.flux[f] - acc / Math.min(f + 1, w)); }
+  let s2 = 0; for (let f = 0; f < n; f++) s2 += on[f] * on[f]; const sd = Math.sqrt(s2 / Math.max(1, n)) || 1;
+  for (let f = 0; f < n; f++) on[f] /= sd;
+  return on;
+}
+// tempo: autocorrelazione con preferenza (log-normale) attorno a 120 BPM; hint = periodo suggerito (in fotogrammi)
+function btTempo(on, hint) {
+  const n = on.length, lo = hint ? Math.max(8, Math.floor(hint / 1.25)) : 24, hi = hint ? Math.min(330, Math.ceil(hint * 1.25)) : 160, ac = new Float64Array(2 * hi + 2);
+  for (let L = Math.max(4, Math.floor(lo / 2) - 1); L <= 2 * hi + 1; L++) { let s = 0; for (let i = L; i < n; i++) s += on[i] * on[i - L]; ac[L] = s / (n - L); }
+  let best = lo, bv = -1;
+  for (let L = lo; L <= hi; L++) {
+    const bpm = 60 * BT_FPS / L;
+    const prior = hint ? Math.exp(-0.5 * Math.pow(Math.log2(L / hint) / 0.08, 2)) : Math.exp(-0.5 * Math.pow(Math.log2(bpm / 120) / 1.0, 2));
+    // un buon periodo ha anche i multipli forti (2L, metà battuta…)
+    const v = (ac[L] + BT_HARM * (0.5 * ac[2 * L] + 0.25 * ac[Math.round(L / 2)])) * prior;
+    if (v > bv && ac[L] >= ac[L - 1] && ac[L] >= ac[L + 1]) { bv = v; best = L; }
+  }
+  const a = ac[best - 1], b = ac[best], c = ac[best + 1], d = (a - c) / (2 * (a - 2 * b + c) || 1);
+  return best + Math.max(-0.5, Math.min(0.5, d));
+}
+// tempo locale (finestre di 8 s): segue chi accelera o rallenta, restando vicino al tempo medio P0
+function btLocalP(on, P0, span = 1.25) {
+  const n = on.length, step = 50, half = 400, out = new Float32Array(n), cs = [], ps = [];
+  const lo = Math.max(8, Math.floor(P0 / span)), hi = Math.ceil(P0 * span);
+  let prev = P0;
+  for (let c = 0; c < n; c += step) {
+    const a = Math.max(0, c - half), b = Math.min(n, c + half);
+    let best = prev, bv = -Infinity;
+    for (let L = lo; L <= hi; L++) {
+      let s = 0; for (let i = a + L; i < b; i++) s += on[i] * on[i - L];
+      s /= Math.max(1, b - a - L);
+      const v = s * Math.exp(-0.5 * Math.pow(Math.log2(L / prev) / 0.12, 2)) * Math.exp(-0.5 * Math.pow(Math.log2(L / P0) / 0.35, 2));
+      if (v > bv) { bv = v; best = L; }
+    }
+    cs.push(c); ps.push(best); prev = best;
+  }
+  const med = ps.map((_, i) => { const w = ps.slice(Math.max(0, i - 2), i + 3).sort((x, y) => x - y); return w[w.length >> 1]; });
+  for (let i = 0, j = 0; i < n; i++) { while (j + 1 < cs.length && cs[j + 1] <= i) j++; const f = j + 1 < cs.length ? (i - cs[j]) / step : 0; out[i] = med[j] * (1 - f) + (j + 1 < med.length ? med[j + 1] : med[j]) * f; }
+  return out;
+}
+// battiti con la programmazione dinamica (Ellis 2007): ogni battito cade su un attacco forte, a distanza ~P dal precedente
+function btTrack(on, P, tight = BT_TIGHT, Pl = null) {
+  const n = on.length; if (n < 4 * P) return [];
+  const R = Math.round(P), ls = new Float32Array(n), K = [];
+  for (let j = -R; j <= R; j++) K.push(Math.exp(-0.5 * Math.pow(j * 32 / P, 2)));
+  for (let i = 0; i < n; i++) { let s = 0; for (let j = -R; j <= R; j++) { const k = i + j; if (k >= 0 && k < n) s += on[k] * K[j + R]; } ls[i] = s; }
+  const cum = new Float32Array(n), back = new Int32Array(n).fill(-1);
+  for (let i = 0; i < n; i++) {
+    const Pi = Pl ? Pl[i] : P, w0 = Math.round(Pi / 2), w1 = Math.round(2 * Pi);
+    let bv = -Infinity, bj = -1;
+    for (let d = w0; d <= w1; d++) { const j = i - d; if (j < 0) break; const lg = Math.log(d / Pi), v = cum[j] - tight * lg * lg; if (v > bv) { bv = v; bj = j; } }
+    cum[i] = ls[i] + (bj >= 0 ? bv : 0); back[i] = bj;
+  }
+  // ultimo battito: l'ultimo massimo locale abbastanza alto
+  const maxes = []; for (let i = 1; i < n - 1; i++) if (cum[i] > cum[i - 1] && cum[i] >= cum[i + 1]) maxes.push(cum[i]);
+  const med = maxes.length ? maxes.slice().sort((a, b) => a - b)[maxes.length >> 1] : 0;
+  let last = n - 1; for (let i = n - 2; i > 0; i--) if (cum[i] > cum[i - 1] && cum[i] >= cum[i + 1] && cum[i] * 2 > med) { last = i; break; }
+  const beats = []; for (let i = last; i >= 0; i = back[i]) beats.push(i);
+  beats.reverse();
+  // tolgo i battiti deboli all'inizio e alla fine (silenzio, applausi…)
+  const sm = beats.map(b => ls[b]), rms = Math.sqrt(sm.reduce((s, v) => s + v * v, 0) / Math.max(1, sm.length)) || 1;
+  let a = 0, z = beats.length; while (a < z && sm[a] < 0.5 * rms) a++; while (z > a && sm[z - 1] < 0.5 * rms) z--;
+  return { beats: beats.slice(a, z), ls };
+}
+// posizione esatta (in secondi) di ogni battito: interpolazione parabolica sull'inviluppo
+function btRefine(beats, ls, bias = 0) {
+  return beats.map(b => {
+    const a = ls[b - 1] || 0, c = ls[b + 1] || 0, m = ls[b], d = (a - c) / (2 * (a - 2 * m + c) || 1);
+    return (b + Math.max(-0.5, Math.min(0.5, d))) / BT_FPS + bias;
+  });
+}
+// primo battito della battuta: cassa forte + cambio d'accordo (di solito all'inizio della battuta), rullante sui deboli
+function btDownbeat(st, beatsF) {
+  const nB = beatsF.length; if (nB < 8) return 0;
+  const val = (arr, f) => { let m = 0; for (let k = f - 3; k <= f + 3; k++) if (k >= 0 && k < arr.length) m = Math.max(m, arr[k]); return m; };
+  const low = beatsF.map(f => val(st.low, f)), mid = beatsF.map(f => val(st.mid, f));
+  const ch = [], nov = [0];
+  for (let k = 0; k < nB; k++) {
+    const a = beatsF[k], b = k + 1 < nB ? beatsF[k + 1] : a + 30, v = new Float64Array(12);
+    for (let f = a; f < b && f < st.done; f++) for (let p = 0; p < 12; p++) v[p] += st.chroma[f * 12 + p];
+    ch.push(v);
+    if (k) { let d = 0, na = 0, nb = 0; for (let p = 0; p < 12; p++) { d += v[p] * ch[k - 1][p]; na += v[p] * v[p]; nb += ch[k - 1][p] ** 2; } nov.push(1 - d / Math.sqrt(na * nb || 1)); }
+  }
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length || 1, mL = mean(low), mM = mean(mid), mN = mean(nov);
+  let best = 0, bs = -Infinity;
+  for (let p = 0; p < 4; p++) {
+    let s = 0, c = 0;
+    for (let k = p; k < nB; k += 4) { s += low[k] / mL - 0.5 * mid[k] / mM + 1.5 * nov[k] / mN; if (k + 2 < nB) s += 0.4 * low[k + 2] / mL; c++; }
+    s /= c || 1; if (s > bs) { bs = s; best = p; }
+  }
+  return best;
+}
+// tempi possibili (per chi vuole scegliere): i picchi più forti dell'autocorrelazione, ben distinti tra loro
+function btCands(on) {
+  const n = on.length, ac = new Float64Array(170); const out = [];
+  for (let L = 20; L <= 165; L++) { let s = 0; for (let i = L; i < n; i++) s += on[i] * on[i - L]; ac[L] = s / (n - L); }
+  const pk = []; for (let L = 24; L <= 160; L++) if (ac[L] > ac[L - 1] && ac[L] >= ac[L + 1]) pk.push({ P: L, s: ac[L] * Math.exp(-0.5 * Math.pow(Math.log2(6000 / L / 120) / 1.0, 2)) });
+  pk.sort((a, b) => b.s - a.s);
+  for (const p of pk) { if (out.every(o => Math.abs(Math.log(o.P / p.P)) > 0.05)) out.push(p); if (out.length >= 4) break; }
+  return out.map(p => p.P);
+}
+// tutto insieme: dall'inviluppo ai battiti (hint: periodo suggerito, in fotogrammi)
+function btBeatsFrom(st, on, hint) {
+  const P = btTempo(on, hint);
+  const tr = btTrack(on, P, BT_TIGHT, BT_LOCAL ? btLocalP(on, P, hint ? 1.12 : 1.25) : null); if (!tr.beats || tr.beats.length < 8) return null;
+  const times = btRefine(tr.beats, tr.ls, BT_BIAS);
+  const iv = []; for (let k = 1; k < times.length; k++) iv.push(times[k] - times[k - 1]); iv.sort((a, b) => a - b);
+  const med = iv[iv.length >> 1], bpm = 60 / med;
+  // affidabilità: quanto gli attacchi cadono sui battiti rispetto a metà strada
+  let onB = 0, offB = 0; for (let k = 0; k + 1 < tr.beats.length; k++) { onB += tr.ls[tr.beats[k]]; offB += tr.ls[Math.round((tr.beats[k] + tr.beats[k + 1]) / 2)]; }
+  let all = 0; for (let i = 0; i < tr.ls.length; i++) all += tr.ls[i]; all /= tr.ls.length || 1;
+  const conf = all > 0 ? (onB / Math.max(1, tr.beats.length - 1)) / all : 9;     // forza degli attacchi sui battiti rispetto alla media
+  // quanto varia il tempo (deviazione dei BPM locali)
+  const loc = []; for (let k = 4; k < times.length; k++) loc.push(240 / (times[k] - times[k - 4]));
+  const sdv = loc.length ? Math.sqrt(loc.reduce((s, v) => s + (v - bpm) ** 2, 0) / loc.length) : 0;
+  return { times, frames: tr.beats, P, bpm, conf, drift: sdv, down: btDownbeat(st, tr.beats) };
+}
+function btBeats(st, opt = {}) { return btBeatsFrom(st, btOnset(st), opt.hint); }
+const BT_HARM = 0.6, BT_TIGHT = 200, BT_LOCAL = true;   // tarati su brani veri (confronto con madmom) e sintetici
+const BT_BIAS = 0.003;     // correzione costante (misurata sui brani sintetici)
+
+const RHY = (() => { const r = loadJSON(K.rhythm) || {}; for (const k of Object.keys(r)) if (!r[k] || r[k].v !== 2) delete r[k]; return r; })();
+let RXA = null;                 // analisi del brano in corso (solo in memoria): battiti, inviluppi, tempi possibili
+function rxBeat() { const t = curTrack(); if (!t) return null; const r = RHY[fileOf(t)]; return r && r.v === 2 && r.rev === t.rev && t.start == null ? r : null; }
+function rxReady() { const t = curTrack(); return !!(t && RXA && RXA.file === fileOf(t) && rxBeat()); }
+let rxAnalyzing = null, rxErr = '', rxProg = 0;
 function flacRange(blob, ix, f0, f1) {
   const si = ix.si.slice(), n = Math.max(0, f1.sample - f0.sample), lo = n % 4294967296;
   si[13] = (si[13] & 0xf0) | (Math.floor(n / 4294967296) & 0x0f); si[14] = (lo >>> 24) & 255; si[15] = (lo >>> 16) & 255; si[16] = (lo >>> 8) & 255; si[17] = lo & 255; si.fill(0, 18);
@@ -2423,7 +2670,8 @@ function flacRange(blob, ix, f0, f1) {
   return new Blob([head, blob.slice(f0.off, f1.off)], { type: 'audio/flac' });
 }
 async function decodePart(blob, ix, t0, t1) {   // → { x: Float32Array mono a 22050 Hz, start: secondi esatti nel brano }
-  const f0 = await flacFindFrame(blob, ix, Math.round(t0 * ix.sr)), f1 = await flacFindFrame(blob, ix, Math.min(ix.total - 1, Math.round(t1 * ix.sr)));
+  const f0 = await flacFindFrame(blob, ix, Math.round(t0 * ix.sr));
+  const f1 = t1 * ix.sr >= ix.total - 1 ? { off: blob.size, sample: ix.total } : await flacFindFrame(blob, ix, Math.round(t1 * ix.sr));
   if (f1.off <= f0.off) throw new Error('pezzo troppo corto');
   const ab = await flacRange(blob, ix, f0, f1).arrayBuffer();
   const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext, oc = new OAC(1, 22050, 22050);
@@ -2432,106 +2680,147 @@ async function decodePart(blob, ix, t0, t1) {   // → { x: Float32Array mono a 
   for (let c = 0; c < ch; c++) { const d = buf.getChannelData(c); for (let i = 0; i < n; i++) x[i] += d[i] / ch; }
   return { x, sr: buf.sampleRate, start: f0.sample / ix.sr };
 }
-// inviluppo degli attacchi (100 al secondo): quanto cresce l'energia in tre bande
-function onsetEnv(x, sr) {
-  const hop = Math.round(sr / 100), n = Math.floor(x.length / hop), e = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
-  const aL = Math.exp(-2 * Math.PI * 150 / sr), aH = Math.exp(-2 * Math.PI * 3000 / sr);
-  let lp = 0, lp2 = 0;
-  for (let f = 0; f < n; f++) {
-    let sL = 0, sM = 0, sH = 0;
-    for (let i = f * hop, end = i + hop; i < end; i++) {
-      const v = x[i]; lp = aL * lp + (1 - aL) * v; lp2 = aH * lp2 + (1 - aH) * v;
-      sL += lp * lp; sH += (v - lp2) * (v - lp2); sM += (lp2 - lp) * (lp2 - lp);
-    }
-    e[0][f] = sL; e[1][f] = sM; e[2][f] = sH;
-  }
-  const on = new Float32Array(n), low = new Float32Array(n);
-  for (let f = 1; f < n; f++) {
-    let s = 0;
-    for (let b = 0; b < 3; b++) { const d = Math.log(1e-9 + e[b][f]) - Math.log(1e-9 + e[b][f - 1]); if (d > 0) s += d * (b === 0 ? 1.4 : 1); if (b === 0) low[f] = Math.max(0, d); }
-    on[f] = s;
-  }
-  const w = 50, out = new Float32Array(n); let acc = 0;              // tolgo la media mobile (mezzo secondo)
-  for (let f = 0; f < n; f++) { acc += on[f]; if (f >= w) acc -= on[f - w]; const m = acc / Math.min(f + 1, w); out[f] = Math.max(0, on[f] - m); }
-  return { on: out, low };
-}
-const at = (a, p) => { const i = Math.floor(p), f = p - i; return i < 0 || i + 1 >= a.length ? 0 : a[i] * (1 - f) + a[i + 1] * f; };
-function combScore(on, P, ph) { let s = 0, k = 0; for (let p = ph; p < on.length - 1; p += P) { s += at(on, p); k++; } return k ? s / k : 0; }
-function tempoOf(on) {
-  let best = { P: 50, s: -1 }, acn = [];
-  for (let L = 30; L <= 100; L++) {                                  // da 200 a 60 BPM
-    let s = 0; for (let i = L; i < on.length; i++) s += on[i] * on[i - L];
-    const bpm = 6000 / L, prior = Math.exp(-0.5 * Math.pow(Math.log2(bpm / 120) / 0.9, 2));
-    acn.push(s); s *= prior; if (s > best.s) best = { P: L, s };
-  }
-  let P = best.P, sc = -1, ph = 0;                                   // affino periodo e fase con il «pettine»
-  for (let p = P - 1.2; p <= P + 1.2; p += 0.02) for (let f = 0; f < p; f += 0.5) { const v = combScore(on, p, f); if (v > sc) { sc = v; P = p; ph = f; } }
-  for (let f = Math.max(0, ph - 1); f < ph + 1; f += 0.05) { const v = combScore(on, P, f); if (v > sc) { sc = v; ph = f; } }
-  const mean = on.reduce((a, b) => a + b, 0) / on.length;
-  return { P, ph, conf: mean > 0 ? sc / mean : 0 };
-}
-// tonalità: profili di Krumhansl sul cromagramma
 const NOTE_IT = ['Do', 'Do♯', 'Re', 'Mi♭', 'Mi', 'Fa', 'Fa♯', 'Sol', 'La♭', 'La', 'Si♭', 'Si'];
-function fftMag(re) {
-  const n = re.length, im = new Float32Array(n);
-  for (let i = 1, j = 0; i < n; i++) { let b = n >> 1; for (; j & b; b >>= 1) j ^= b; j ^= b; if (i < j) { const t = re[i]; re[i] = re[j]; re[j] = t; } }
-  for (let len = 2; len <= n; len <<= 1) {
-    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
-    for (let i = 0; i < n; i += len) { let cr = 1, ci = 0; for (let k = 0; k < len / 2; k++) {
-      const a = i + k, b = a + len / 2, tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
-      re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti; const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr; } }
-  }
-  const m = new Float32Array(n / 2); for (let i = 0; i < n / 2; i++) m[i] = Math.hypot(re[i], im[i]); return m;
-}
-function keyOf(x, sr) {
-  const N = 4096, chroma = new Float64Array(12), win = new Float32Array(N);
-  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
-  for (let s = 0; s + N <= x.length; s += N) {
-    const fr = new Float32Array(N); for (let i = 0; i < N; i++) fr[i] = x[s + i] * win[i];
-    const m = fftMag(fr);
-    for (let k = 1; k < N / 2; k++) { const f = k * sr / N; if (f < 55 || f > 2000) continue; const pc = ((Math.round(12 * Math.log2(f / 440)) % 12) + 12 + 9) % 12; chroma[pc] += m[k]; }
-  }
-  const MAJ = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88], MIN = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
-  const corr = (a, b) => { const ma = a.reduce((s, v) => s + v, 0) / 12, mb = b.reduce((s, v) => s + v, 0) / 12; let n = 0, da = 0, db = 0; for (let i = 0; i < 12; i++) { n += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; db += (b[i] - mb) ** 2; } return n / Math.sqrt(da * db || 1); };
-  let best = { r: -2, root: 0, minor: false };
-  for (let r = 0; r < 12; r++) for (const [prof, minor] of [[MAJ, false], [MIN, true]]) {
-    const rot = Array.from({ length: 12 }, (_, i) => prof[(i - r + 12) % 12]), c = corr(Array.from(chroma), rot);
-    if (c > best.r) best = { r: c, root: r, minor };
-  }
-  return best;
-}
+const fmtBpm = x => x >= 100 || Math.abs(x - Math.round(x)) < 0.05 ? String(Math.round(x)) : x.toFixed(1).replace('.', ',');
+// tutto il brano, a pezzi di 15 secondi (poca memoria, l'interfaccia resta libera)
 async function analyzeRhythm(t) {
   const f = fileOf(t);
   if (!curBlob || curBlob.file !== f || !curBlob.blob) throw new Error('il brano non è ancora in memoria: riprova tra qualche secondo');
   if (t.ext !== 'flac') throw new Error('per ora l\'analisi funziona solo con i FLAC');
-  const blob = curBlob.blob, ix = await flacIndex(blob), D = ix.total / ix.sr, t0 = performance.now();
-  const W = Math.min(30, D * 0.45);
-  const A = await decodePart(blob, ix, Math.max(0, D * 0.2), Math.max(0, D * 0.2) + W);
-  const ea = onsetEnv(A.x, A.sr), ta = tempoOf(ea.on);
-  let P = ta.P / 100, beatA = A.start + ta.ph / 100;                  // secondi
-  if (D > 75) {                                                       // secondo pezzo più avanti: tempo preciso su tutto il brano
-    const B = await decodePart(blob, ix, D * 0.65, D * 0.65 + W);
-    const eb = onsetEnv(B.x, B.sr); let sc = -1, phB = 0;
-    for (let f2 = 0; f2 < ta.P; f2 += 0.25) { const v = combScore(eb.on, ta.P, f2); if (v > sc) { sc = v; phB = f2; } }
-    const beatB = B.start + phB / 100, n = Math.round((beatB - beatA) / P);
-    if (n > 0 && Math.abs((beatB - beatA) / n - P) / P < 0.01) P = (beatB - beatA) / n;
+  const blob = curBlob.blob, ix = await flacIndex(blob), D = ix.total / ix.sr, t0 = performance.now(), st = btInit(D), CH = 15;
+  rxProg = 0;
+  for (let T = 0; T < D - 0.02; T += CH) {
+    const p = await decodePart(blob, ix, Math.max(0, T - 0.25), Math.min(D, T + CH + 0.3));
+    btChunk(st, p.x, p.start, T, Math.min(D, T + CH));
+    rxProg = Math.min(0.99, (T + CH) / D); rxPaintProg();
+    await new Promise(r => setTimeout(r, 0));
+    if (!RX.on || !RX.drums.on || fileOf(curTrack() || {}) !== f) throw new Error('interrotta');
   }
-  let down = 0, ds = -1;                                              // primo battito della battuta: il più forte nei bassi
-  for (let j = 0; j < 4; j++) { let s = 0; for (let p = ta.ph + j * ta.P; p < ea.low.length - 1; p += 4 * ta.P) s += at(ea.low, p); if (s > ds) { ds = s; down = j; } }
-  const key = keyOf(A.x, A.sr);
-  const r = { rev: t.rev, bpm: 60 / P, beat0: beatA, down: down * 4, conf: ta.conf, key: key.root, minor: key.minor, keyR: key.r, at: Date.now() };
+  const old = RHY[f] && RHY[f].v === 2 && RHY[f].rev === t.rev ? RHY[f] : null, on = btOnset(st);
+  const res = btBeatsFrom(st, on, old && old.hint || null); if (!res) throw new Error('non trovo un ritmo regolare in questo brano');
+  const k = btKey(st.key, st.sr);
+  const mult = old && old.mult || 1, eff = rxMult(res.times, res.down, mult);
+  const r = { v: 2, rev: t.rev, bpm: res.bpm * mult, conf: res.conf, drift: res.drift * mult, key: k.key, minor: k.minor, keyR: k.keyR, tune: k.tune,
+    down: old ? old.down : eff.down, nudge: old ? old.nudge || 0 : 0, hint: old ? old.hint || null : null, mult, at: Date.now() };
   RHY[f] = r; const ks = Object.keys(RHY); if (ks.length > 300) delete RHY[ks[0]]; saveJSON(K.rhythm, RHY);
-  log(`Remix: «${trackInfo(t).title}» · ${r.bpm.toFixed(1).replace('.', ',')} BPM · ${NOTE_IT[r.key]} ${r.minor ? 'minore' : 'maggiore'} · affidabilità ${rxConfTxt(r)} · ${Math.round(performance.now() - t0)} ms`);
+  RXA = { file: f, st, on, base: res, times: eff.times, P: res.P / mult, cands: btCands(on), ver: (RXA ? RXA.ver : 0) + 1, cal: st.cal, D };
+  log(`Remix: «${trackInfo(t).title}» · ${fmtBpm(r.bpm)} BPM${r.drift > 1.5 ? ` (varia di ±${Math.round(r.drift)})` : ''} · ${res.times.length} battiti · ${NOTE_IT[r.key]} ${r.minor ? 'minore' : 'maggiore'}${Math.abs(r.tune) >= 15 ? ` (accordatura ${r.tune > 0 ? '+' : ''}${r.tune} cent)` : ''} · affidabilità ${rxConfTxt(r)} · altri tempi possibili ${RXA.cands.filter(P => Math.abs(Math.log(P / res.P)) > 0.04).slice(0, 3).map(P => fmtBpm(6000 / P)).join(', ')} · ${Math.round(performance.now() - t0)} ms`);
   return r;
 }
-const rxConfTxt = r => r.conf > 3 ? 'alta' : r.conf > 1.8 ? 'media' : 'bassa';
+// doppio o metà: a metà strada tra due battiti, oppure uno sì e uno no (il primo della battuta resta tale)
+function rxMult(times, down, mult) {
+  let tt = times, d = down;
+  for (let m = mult; m > 1.01; m /= 2) { const o = []; for (let k = 0; k < tt.length; k++) { o.push(tt[k]); if (k + 1 < tt.length) o.push((tt[k] + tt[k + 1]) / 2); } tt = o; d = (d * 2) % 4; }
+  for (let m = mult; m < 0.99; m *= 2) { const i0 = d % 2; tt = tt.filter((_, k) => k % 2 === i0); d = Math.floor((d - i0) / 2); }
+  return { times: tt, down: d };
+}
+// rifaccio i battiti con un altro tempo (un tempo proposto, il tocco) o ne cambio il passo (× 2, ÷ 2): pochi millisecondi
+function rxRetrack(hintP, what, mult) {
+  const t = curTrack(), r = rxBeat(); if (!t || !r || !rxReady()) return;
+  let res = RXA.base, m;
+  if (mult == null) {                                                  // un altro tempo: rifaccio i battiti
+    res = btBeatsFrom(RXA.st, RXA.on, Math.max(12, Math.min(320, hintP))); if (!res) { toast('Con questo tempo non trovo i battiti'); return; }
+    m = 1;
+  } else m = Math.max(0.25, Math.min(4, (r.mult || 1) * mult));
+  const eff = rxMult(res.times, res.down, m);
+  if (eff.times.length < 8) { toast('Troppo lento: restano pochi battiti'); return; }
+  Object.assign(r, { bpm: res.bpm * m, conf: res.conf, drift: res.drift * m, down: eff.down, hint: mult == null ? res.P : r.hint, mult: m });
+  RXA.base = res; RXA.times = eff.times; RXA.P = res.P / m; RXA.ver++;
+  saveJSON(K.rhythm, RHY); drumStopAll(); rxEchoTime(); refreshRx();
+  log(`Remix: ${what} → ${fmtBpm(r.bpm)} BPM · ${RXA.times.length} battiti · affidabilità ${rxConfTxt(r)}`);
+}
+const rxConfTxt = r => r.conf > 5.5 ? 'alta' : r.conf > 3.5 ? 'media' : 'bassa';
+function rxPaintProg() { const p = document.querySelector('#rxBox [data-rxprog]'); if (p) p.textContent = `Analizzo il ritmo di tutto il brano… ${Math.round(rxProg * 100)}%`; }
 function rxEnsureAnalysis() {
-  const t = curTrack(); if (!t || !RX.on || !RX.drums.on || rxBeat() || rxAnalyzing) return;
-  if (t.start != null) { rxErr = 'brani dentro un file unico con .cue: non ancora'; refreshRx(); return; }
+  const t = curTrack(); if (!t || !RX.on || !RX.drums.on || rxReady() || rxAnalyzing) return;
+  if (t.start != null) { if (!rxErr) { rxErr = 'brani dentro un file unico con .cue: non ancora'; refreshRx(); } return; }
+  if (t.ext !== 'flac') { if (!rxErr) { rxErr = 'per ora la batteria funziona solo con i FLAC'; refreshRx(); } return; }
   if (!curBlob || curBlob.file !== fileOf(t)) { rxErr = ''; if (!CURDL && !isHidden()) fetchCurrent(t); return; }
+  if (RXA && RXA.file !== fileOf(t)) RXA = null;
   rxErr = ''; rxAnalyzing = t.file; refreshRx();
-  analyzeRhythm(t).catch(e => { rxErr = e.message; log('Remix: analisi non riuscita · ' + e.message); })
+  analyzeRhythm(t).catch(e => { if (e.message !== 'interrotta') { rxErr = e.message; log('Remix: analisi non riuscita · ' + e.message); } })
     .finally(() => { rxAnalyzing = null; DS.next = null; rxEchoTime(); refreshRx(); });
+}
+
+/* --- aggancio dal vivo ---
+   Il tempo che il lettore dichiara (currentTime) può non coincidere con il suono che arriva al motore audio: su iPhone
+   la differenza può essere di qualche decimo di secondo. Un piccolo modulo (rx-ascolto.js) ascolta la musica nel motore
+   e ne calcola l'inviluppo; lo confronto con quello del file e trovo dove si trova davvero il brano, al millesimo. */
+const RXL = { node: null, mute: null, ctx: null, loading: false, ok: null, tt: [], vv: [], segAt: 0, A: null, fitAt: 0, lag: (() => { const v = parseFloat(load(K.rxLag)); return isFinite(v) ? v : null; })(), logged: '', loggedL: 0, rho: 0, wideAt: 0, cand: null, alt: 0 };
+function rxListen() {
+  if (!ac || !eqPre || RXL.ok === false || RXL.loading || (RXL.node && RXL.ctx === ac)) return;
+  if (!ac.audioWorklet || typeof AudioWorkletNode === 'undefined') { RXL.ok = false; log('Remix: aggancio dal vivo non disponibile in questo browser'); return; }
+  const ctx = ac; RXL.loading = true;
+  ctx.audioWorklet.addModule('rx-ascolto.js?v=' + VERSION).then(() => {
+    RXL.loading = false; if (ac !== ctx || !eqPre || !(RX.on && RX.drums.on)) return;
+    const n = new AudioWorkletNode(ctx, 'rx-ascolto', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] }), mute = ctx.createGain();
+    mute.gain.value = 0; n.connect(mute); mute.connect(ctx.destination); eqPre.connect(n);
+    n.port.onmessage = e => rxFrames(e.data);
+    Object.assign(RXL, { node: n, mute, ctx, ok: true, tt: [], vv: [], A: null });
+  }).catch(e => { RXL.loading = false; RXL.ok = false; log('Remix: aggancio dal vivo non disponibile (' + e.message + ')'); });
+}
+function rxUnlisten() {
+  if (RXL.node) { try { RXL.node.port.postMessage('fine'); RXL.node.disconnect(); RXL.mute.disconnect(); if (eqPre) eqPre.disconnect(RXL.node); } catch (e) {} }
+  Object.assign(RXL, { node: null, mute: null, ctx: null, tt: [], vv: [], A: null });
+}
+function rxFrames(d) {
+  for (let i = 0; i + 4 < d.length; i += 5) if (d[i] > 0) { RXL.tt.push(d[i]); RXL.vv.push([Math.min(4, d[i + 1]), Math.min(4, d[i + 2]), Math.min(4, d[i + 3]), Math.min(4, d[i + 4])]); }
+  if (RXL.tt.length > 1800) { RXL.tt.splice(0, RXL.tt.length - 1500); RXL.vv.splice(0, RXL.vv.length - 1500); }
+}
+function rxSegReset() { if (ac) RXL.segAt = ac.currentTime + 0.3; RXL.A = null; RXL.cand = null; RXL.wideAt = 0; }
+// confronto gli ultimi secondi ascoltati con l'inviluppo del file, banda per banda: lo spostamento migliore dà l'orario vero del brano
+function rxFit(A0, rate, near) {
+  const cal = RXA && RXA.cal; if (!cal) return null;
+  const now = ac.currentTime, from = Math.max(RXL.segAt, now - 8.5);
+  let i0 = RXL.tt.length; while (i0 > 0 && RXL.tt[i0 - 1] >= from) i0--;
+  const n = RXL.tt.length - i0; if (n < 380) return null;
+  const tt = RXL.tt.slice(i0), Z = [0, 1, 2, 3].map(b => { const z = new Float32Array(n); let m = 0; for (let j = 0; j < n; j++) { z[j] = RXL.vv[i0 + j][b]; m += z[j]; } m /= n; let q = 0; for (let j = 0; j < n; j++) { z[j] -= m; q += z[j] * z[j]; } return { z, q }; });
+  const nf = cal.length / 4, sc = [], LS = [], D = new Float64Array(n);
+  for (let j = 0; j < n; j++) D[j] = (tt[j] - tt[0]) * rate * BT_FPS;
+  const lo = near != null ? near - 0.05 : -2.5, hi = near != null ? near + 0.05 : 3.0, step = near != null ? 0.0025 : 0.01;   // il contatore può sbagliare anche di più di un secondo
+  let best = -1;
+  const s = new Float64Array(4), so = new Float64Array(4), so2 = new Float64Array(4);
+  for (let L = lo; L <= hi + 1e-9; L += step) {
+    let tot = 0, cnt = 0; s.fill(0); so.fill(0); so2.fill(0);
+    const p0 = (tt[0] - A0 - L) * rate * BT_FPS;
+    for (let j = 0; j < n; j++) {
+      const p = p0 + D[j], i = Math.floor(p), f = p - i; if (i < 0 || i + 1 >= nf) continue;
+      for (let b = 0; b < 4; b++) { const o = Math.min(4, cal[i * 4 + b]) * (1 - f) + Math.min(4, cal[i * 4 + 4 + b]) * f; s[b] += Z[b].z[j] * o; so[b] += o; so2[b] += o * o; }
+    }
+    for (let b = 0; b < 4; b++) { const vo = so2[b] - so[b] * so[b] / n; if (vo > 1e-9 && Z[b].q > 1e-9) { tot += s[b] / Math.sqrt(Z[b].q * vo); cnt++; } }
+    sc.push(cnt ? tot / cnt : 0); LS.push(L); if (best < 0 || sc[sc.length - 1] > sc[best]) best = sc.length - 1;
+  }
+  let second = -1; for (let i = 0; i < sc.length; i++) if (Math.abs(LS[i] - LS[best]) > 0.06 && sc[i] > second) second = sc[i];
+  const a = sc[best - 1] ?? sc[best], c = sc[best + 1] ?? sc[best], d = (a - c) / (2 * (a - 2 * sc[best] + c) || 1);
+  const L = LS[best] + Math.max(-0.5, Math.min(0.5, d)) * step;
+  if (near == null) RXL.curve = { A0, LS, sc };                       // per le prove
+  return { L, rho: sc[best], ratio: second > 0 ? sc[best] / second : 9, n };
+}
+function rxSync2(A0, rate) {           // ogni secondo e mezzo: aggiorno l'orario vero (RXL.A) e il ritardo tipico del dispositivo
+  const now = ac.currentTime;
+  if (!RXL.node || !RXA || now - RXL.fitAt < 1.5) return;
+  RXL.fitAt = now;
+  const g = RXL.A == null || now - RXL.wideAt > 6 ? rxFit(A0, rate) : null;    // ricerca larga (a passi di 10 ms): all'inizio e ogni 6 s
+  if (g) { RXL.wideAt = now; RXL.rho = g.rho; }
+  if (RXL.A == null) {                                                 // primo aggancio di questo tratto: abbastanza ascolto, un picco netto, due misure d'accordo
+    if (!g || g.n < 550 || g.rho < 0.3 || g.ratio < 1.12) { RXL.cand = null; return; }
+    const f = rxFit(A0, rate, g.L), Ag = A0 + (f ? f.L : g.L);
+    if (RXL.cand == null || Math.abs(Ag - RXL.cand) > 0.015) { RXL.cand = Ag; return; }
+    RXL.A = (Ag + RXL.cand) / 2; RXL.cand = null; RXL.alt = 0;
+  } else {
+    const nr = rxFit(A0, rate, RXL.A - A0);                            // vicino a dove sono, al millesimo: seguo le piccole derive
+    if (g && Math.abs(A0 + g.L - RXL.A) > 0.05 && g.ratio >= 1.2 && g.rho > (nr ? nr.rho : 0) + 0.08) {      // nettamente meglio altrove, due volte di fila
+      if (++RXL.alt >= 2) { const f = rxFit(A0, rate, g.L); RXL.A = A0 + (f ? f.L : g.L); RXL.alt = 0; }
+    } else if (nr) { if (g) RXL.alt = 0; RXL.rho = nr.rho; if (nr.rho >= 0.25) RXL.A += (A0 + nr.L - RXL.A) * 0.3; }
+  }
+  const r = { L: RXL.A - A0, rho: RXL.rho };
+  RXL.lag = RXL.lag == null ? r.L : RXL.lag * 0.7 + r.L * 0.3; store(K.rxLag, RXL.lag.toFixed(4));
+  const f = fileOf(curTrack() || {});
+  if (RXL.logged !== f || Math.abs(r.L - RXL.loggedL) > 0.03) {
+    RXL.logged = f; RXL.loggedL = r.L;
+    log(`Remix: batteria agganciata al suono · il contatore del lettore è ${r.L >= 0 ? 'avanti' : 'indietro'} di ${Math.abs(Math.round(r.L * 1000))} ms rispetto a quello che si sente · somiglianza ${r.rho.toFixed(2)}`);
+    if (rxOpen) refreshRx();
+  }
 }
 
 /* --- batteria: suoni creati qui (niente campioni da internet) --- */
@@ -2557,42 +2846,59 @@ async function rxKit() {
   return KIT;
 }
 let drumBus = null, bassBus = null;
-const DS = { next: null, off: null, srcs: [], timer: null, rate: 1, beatKey: '' };
+const DS = { next: null, off: null, srcs: [], timer: null, rate: 1, beatKey: '', base: null, plan: '' };
 function drumsLive() { return RX.on && RX.drums.on && !!ac && !!KIT; }
-function drumStopAll() { const now = ac ? ac.currentTime : 0; for (const s of DS.srcs) { if (s.at > now - 0.01) { try { s.n.stop(); } catch (e) {} } } DS.srcs = []; DS.next = null; DS.off = null; }
-function playHit(row, when) {
+function drumStopAll() { drumCancel(-0.01); DS.srcs = []; DS.next = null; DS.off = null; DS.base = null; rxSegReset(); }
+function drumCancel(after) {          // fermo i colpi già programmati che devono ancora suonare
+  const now = ac ? ac.currentTime : 0;
+  DS.srcs = DS.srcs.filter(s => { if (s.at > now + after) { try { s.n.stop(); } catch (e) {} return false; } return true; });
+}
+function playHit(row, when, len) {
   if (row === 'bass') {
     const b = rxBeat(); if (!b) return;
-    const midi = 36 + ((b.key - 0 + 12) % 12), f = 440 * Math.pow(2, (midi - 69) / 12), o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
+    const midi = 36 + b.key + (b.tune || 0) / 100, f = 440 * Math.pow(2, (midi - 69) / 12), o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
     o.type = 'sawtooth'; o.frequency.value = f; lp.type = 'lowpass'; lp.frequency.value = 420; g.gain.setValueAtTime(0.0001, when); g.gain.exponentialRampToValueAtTime(0.7, when + 0.01);
-    const len = 60 / b.bpm / 2 / (audio.playbackRate || 1); g.gain.exponentialRampToValueAtTime(0.0008, when + len);
+    g.gain.exponentialRampToValueAtTime(0.0008, when + len);
     o.connect(lp); lp.connect(g); g.connect(bassBus); o.start(when); o.stop(when + len + 0.05); DS.srcs.push({ n: o, at: when }); return;
   }
   const s = ac.createBufferSource(); s.buffer = KIT[row]; s.connect(drumBus); s.start(when); DS.srcs.push({ n: s, at: when });
 }
+const rxBeatAt = (times, s) => { let lo = 0, hi = times.length; while (lo < hi) { const m = (lo + hi) >> 1; if (times[m] <= s) lo = m + 1; else hi = m; } return lo - 1; };   // ultimo battito ≤ s
 function drumTick() {
   if (!drumsLive()) return;
-  const t = curTrack(), b = rxBeat();
-  if (!t || !b || audio.paused || seeking || seekWait || GP && GP.state === 'starting') { if (DS.srcs.length || DS.next != null) drumStopAll(); return; }
-  const rate = audio.playbackRate || 1, songNow = absNow(), acNow = ac.currentTime;
-  const est = acNow - songNow / rate, key = fileOf(t) + '|' + rate + '|' + b.bpm + '|' + RX.drums.nudge;
-  if (DS.beatKey !== key || DS.off == null || Math.abs(est - DS.off) > 0.08) { if (DS.off != null) drumStopAll(); DS.off = est; DS.beatKey = key; }
-  else DS.off = DS.off * 0.92 + est * 0.08;                          // il tempo del lettore «trema» un po': lo smusso
-  const step = 60 / b.bpm / 4, b0 = b.beat0 + RX.drums.nudge / 1000, ahead = isHidden() ? 2.5 : 0.3, end = trackEnd(t) || 1e9;
-  let n = DS.next != null ? DS.next : Math.ceil((songNow - b0) / step - 1e-6);
-  for (let guard = 0; guard < 400; guard++, n++) {
-    const st = b0 + n * step; if (st >= end) break;
-    const when = DS.off + st / rate; if (when > acNow + ahead) break;
+  const t = curTrack();
+  if (!t || !rxReady() || audio.paused || seeking || seekWait || GP && GP.state === 'starting') { if (DS.srcs.length || DS.next != null) drumStopAll(); return; }
+  const b = rxBeat(), times = RXA.times, rate = audio.playbackRate || 1, songNow = absNow(), acNow = ac.currentTime;
+  const est = acNow - songNow / rate, key = fileOf(t) + '|' + rate, plan = RXA.ver + '|' + b.down + '|' + b.nudge;
+  if (DS.beatKey !== key || DS.off == null || Math.abs(est - DS.off) > 0.25) { drumStopAll(); DS.off = est; DS.beatKey = key; }   // altro brano, salto, velocità: riparto
+  else DS.off += (est - DS.off) * 0.05;                               // il tempo del lettore «trema» un po': lo smusso
+  if (DS.plan !== plan) { drumCancel(0.004); DS.next = null; DS.plan = plan; }      // battiti rifatti o spostati: riprogrammo
+  rxSync2(DS.off, rate);
+  const base = RXL.A != null ? RXL.A : DS.off + (RXL.lag || 0);       // orario vero del brano (ascoltato), o la stima con il ritardo tipico
+  if (DS.base != null && Math.abs(base - DS.base) > 0.012) { drumCancel(0.004); DS.next = null; }
+  DS.base = base;
+  const extra = RX.semi ? 0.05 : 0, nud = (b.nudge || 0) / 1000, ahead = isHidden() ? 2.5 : 0.8;   // margine: se la pagina si blocca un attimo i colpi sono già pronti
+  // la prima volta in assoluto aspetto l'aggancio (al massimo 12 s): meglio qualche secondo di silenzio che colpi fuori tempo
+  if (RXL.A == null && RXL.lag == null && RXL.ok !== false && acNow < RXL.segAt + 12) { DS.next = null; return; }
+  let g = DS.next;
+  if (g == null) g = Math.max(0, rxBeatAt(times, (acNow - base - extra) * rate - nud)) * 4;
+  for (let guard = 0; guard < 400; guard++, g++) {
+    const k = g >> 2, j = g & 3; if (k + 1 >= times.length) break;
+    const len = times[k + 1] - times[k], st = times[k] + j / 4 * len + nud, when = base + st / rate + extra;
+    if (when > acNow + ahead) break;
     if (when < acNow - 0.005) continue;
-    const pos = ((n - b.down) % 16 + 16) % 16;
-    for (const [row] of RXROWS) if (RX.drums.grid[row][pos]) playHit(row, when);
+    const pos = (((k - b.down) % 4 + 4) % 4) * 4 + j;
+    for (const [row] of RXROWS) if (RX.drums.grid[row][pos]) playHit(row, when, len / 2 / rate);
   }
-  DS.next = n;
+  DS.next = g;
   if (DS.srcs.length > 200) DS.srcs = DS.srcs.filter(s => s.at > acNow - 1);
-  if (!isHidden()) rxPaintStep(Math.floor((songNow - b0) / step), b);
+  if (!isHidden()) {
+    const s = (acNow - base - extra) * rate - nud, k = rxBeatAt(times, s);
+    if (k >= 0 && k + 1 < times.length) rxPaintStep((((k - b.down) % 4 + 4) % 4) * 4 + Math.min(3, Math.floor(4 * (s - times[k]) / (times[k + 1] - times[k]))));
+  }
 }
-function rxPaintStep(n, b) {
-  const pos = ((n - b.down) % 16 + 16) % 16, grid = document.querySelector('#rxBox .rxgrid'); if (!grid || grid.dataset.pos === String(pos)) return;
+function rxPaintStep(pos) {
+  const grid = document.querySelector('#rxBox .rxgrid'); if (!grid || grid.dataset.pos === String(pos)) return;
   grid.dataset.pos = pos; grid.querySelectorAll('.cur').forEach(e => e.classList.remove('cur')); grid.querySelectorAll(`[data-s="${pos}"]`).forEach(e => e.classList.add('cur'));
 }
 function rxDrumLoop() {
@@ -2608,8 +2914,8 @@ function rxSync() {
   if (ac) {
     rxChain();
     if (drumBus) { drumBus.gain.value = RX.drums.vol; bassBus.gain.value = RX.drums.bassVol; }
-    if (RX.on && RX.drums.on) rxKit().then(() => { rxEnsureAnalysis(); rxDrumLoop(); }).catch(e => log('Batteria non disponibile: ' + e.message));
-    else rxDrumLoop();
+    if (RX.on && RX.drums.on) { rxListen(); rxKit().then(() => { rxEnsureAnalysis(); rxDrumLoop(); }).catch(e => log('Batteria non disponibile: ' + e.message)); }
+    else { rxUnlisten(); rxDrumLoop(); }
   } else rxDrumLoop();
   updatePosition();
 }
@@ -2685,38 +2991,44 @@ function rxPanel() {
     rxFxRow('pan8', 'Audio 8D', 'Il suono gira intorno alla testa: va ascoltato in cuffia.', () => [
       rxSlider('Velocità', 0, 1, 0.01, fx.pan8.speed, pct, x => { fx.pan8.speed = x; custom(); if (RXN.pan) RXN.pan.o.frequency.value = 0.03 + x * 0.6; })]));
   // batteria
-  const b = rxBeat(), t = curTrack();
+  const b = rxBeat(), t = curTrack(), ready = rxReady();
   wrap.append(h('div', { class: 'rxsec' }, 'Batteria a tempo'),
-    swRow('Batteria', 'Analizzo il ritmo del brano e ci suono sopra una batteria. Funziona meglio con brani a tempo costante.', RX.drums.on, on => { RX.drums.on = on; log('Remix: batteria ' + (on ? 'accesa' : 'spenta')); rxSync(); refreshRx(); }));
+    swRow('Batteria', 'Trovo ogni battito del brano, anche quando il tempo cambia, e ci suono sopra una batteria. Mentre suona ascolto la musica per tenerla agganciata a quello che senti.', RX.drums.on, on => { RX.drums.on = on; log('Remix: batteria ' + (on ? 'accesa' : 'spenta')); rxSync(); refreshRx(); }));
   if (RX.drums.on) {
-    const status = rxAnalyzing ? 'Analizzo il ritmo del brano…' : b ? `${b.bpm.toFixed(1).replace('.', ',')} BPM · ${NOTE_IT[b.key]} ${b.minor ? 'minore' : 'maggiore'} · affidabilità ${rxConfTxt(b)}`
-      : rxErr ? 'Analisi non riuscita: ' + rxErr : t && t.ext !== 'flac' ? 'Per ora la batteria funziona solo con i FLAC.' : 'Aspetto che il brano sia in memoria…';
-    wrap.append(h('p', { class: 'small', style: 'margin:0' }, status));
-    if (b) {
-      const upd = (fn, what) => { const r = RHY[fileOf(t)]; fn(r); saveJSON(K.rhythm, RHY); drumStopAll(); rxEchoTime(); refreshRx(); log(`Remix: ${what} → ${r.bpm.toFixed(1).replace('.', ',')} BPM · battuta ${r.down / 4 + 1} · spostamento ${Math.round((r.beat0 - (r.beat00 ?? r.beat0)) * 1000)} ms`); };
+    const status = rxAnalyzing ? h('p', { class: 'small', style: 'margin:0', 'data-rxprog': '' }, `Analizzo il ritmo di tutto il brano… ${Math.round(rxProg * 100)}%`)
+      : ready ? h('p', { class: 'small', style: 'margin:0' }, `${fmtBpm(b.bpm)} BPM${b.drift > 1.5 ? ` (il tempo varia di ±${Math.round(b.drift)})` : ''} · ${NOTE_IT[b.key]} ${b.minor ? 'minore' : 'maggiore'} · affidabilità ${rxConfTxt(b)}`)
+      : h('p', { class: 'small', style: 'margin:0' }, rxErr ? 'Analisi non riuscita: ' + rxErr : 'Aspetto che il brano sia in memoria…');
+    wrap.append(status);
+    if (ready) {
+      const syncTxt = RXL.ok === false ? 'Aggancio al suono non disponibile qui: uso il contatore del lettore.' : RXL.A != null ? 'Agganciata al suono che senti.' : RXL.node ? 'Mi aggancio al suono… (pochi secondi dopo ogni avvio o salto)' : 'Preparo l\'aggancio al suono…';
+      wrap.append(h('p', { class: 'small mut', style: 'margin:0' }, syncTxt));
+      const upd = (fn, what) => { fn(b); saveJSON(K.rhythm, RHY); refreshRx(); log(`Remix: ${what} → battuta ${b.down + 1} · spostamento ${b.nudge || 0} ms`); };
+      const other = RXA.cands.filter(P => Math.abs(Math.log(P / RXA.P)) > 0.04).slice(0, 3);
       wrap.append(h('div', { class: 'eqp' },
-        rxChip(false, '× 2', () => upd(r => { r.bpm *= 2; }, '× 2')), rxChip(false, '÷ 2', () => upd(r => { r.bpm /= 2; }, '÷ 2')),
-        rxChip(false, '− 10 ms', () => upd(r => { r.beat00 ??= r.beat0; r.beat0 -= 0.01; }, '− 10 ms')), rxChip(false, '+ 10 ms', () => upd(r => { r.beat00 ??= r.beat0; r.beat0 += 0.01; }, '+ 10 ms')),
-        rxChip(false, 'Sposta la battuta', () => upd(r => { r.down = (r.down + 4) % 16; }, 'battuta spostata')),
+        rxChip(false, '× 2', () => rxRetrack(0, '× 2', 2)), rxChip(false, '÷ 2', () => rxRetrack(0, '÷ 2', 0.5)),
+        rxChip(false, '− 10 ms', () => upd(r => { r.nudge = (r.nudge || 0) - 10; }, '− 10 ms')), rxChip(false, '+ 10 ms', () => upd(r => { r.nudge = (r.nudge || 0) + 10; }, '+ 10 ms')),
+        rxChip(false, 'Sposta la battuta', () => upd(r => { r.down = (r.down + 1) % 4; }, 'battuta spostata'))));
+      wrap.append(h('p', { class: 'small mut', style: 'margin:0' }, 'Se segue un altro ritmo, prova:'), h('div', { class: 'eqp' },
+        ...other.map(P => rxChip(false, `${fmtBpm(6000 / P)} BPM`, () => rxRetrack(P, `tempo scelto ${fmtBpm(6000 / P)}`))),
         rxChip(false, 'Tocca a tempo', () => {
           const now = absNow(); rxTaps = rxTaps.filter(x => now - x < 3 && now > x); rxTaps.push(now);
-          if (rxTaps.length >= 4) { const iv = rxTaps.slice(1).map((x, i) => x - rxTaps[i]).sort((a, c) => a - c), med = iv[Math.floor(iv.length / 2)]; upd(r => { r.bpm = 60 / med; r.beat0 = r.beat00 = now; r.down = 0; r.conf = 9; }, 'tempo dal tocco'); toast(`${Math.round(60 / med)} BPM dal tuo tocco`); }
+          if (rxTaps.length >= 4) { const iv = rxTaps.slice(1).map((x, i) => x - rxTaps[i]).sort((a, c) => a - c), med = iv[Math.floor(iv.length / 2)]; rxTaps = []; rxRetrack(med * BT_FPS, `tempo dal tocco ${fmtBpm(60 / med)}`); toast(`Rifaccio i battiti a circa ${Math.round(60 / med)} BPM`); }
           else toast(`Tocca ancora (${rxTaps.length} di 4)`);
         })));
-      wrap.append(h('div', { class: 'eqp' }, ...Object.entries(RXPATN).map(([k, n]) => rxChip(RX.drums.pattern === k, n, () => { RX.drums.pattern = k; RX.drums.grid = rxGridFrom(k); refreshRx(); }))));
+      wrap.append(h('div', { class: 'eqp' }, ...Object.entries(RXPATN).map(([k, n]) => rxChip(RX.drums.pattern === k, n, () => { RX.drums.pattern = k; RX.drums.grid = rxGridFrom(k); drumCancel(0.004); DS.next = null; refreshRx(); }))));
       const grid = h('div', { class: 'rxgrid', role: 'grid', 'aria-label': 'Sequenza della batteria, 16 passi' });
       for (const [row, name] of RXROWS) {
         grid.append(h('span', { class: 'rxl' }, name));
         for (let s = 0; s < 16; s++) {
           const on = RX.drums.grid[row][s];
           grid.append(h('button', { class: 'rxc' + (on ? ' on' : '') + (s % 4 === 0 ? ' b' : ''), 'data-s': s, 'aria-label': `${name}, passo ${s + 1}`, 'aria-pressed': on ? 'true' : 'false',
-            onclick: e => { RX.drums.grid[row][s] = !RX.drums.grid[row][s]; RX.drums.pattern = 'custom'; e.currentTarget.classList.toggle('on'); e.currentTarget.setAttribute('aria-pressed', String(RX.drums.grid[row][s])); } }));
+            onclick: e => { RX.drums.grid[row][s] = !RX.drums.grid[row][s]; RX.drums.pattern = 'custom'; drumCancel(0.004); DS.next = null; e.currentTarget.classList.toggle('on'); e.currentTarget.setAttribute('aria-pressed', String(RX.drums.grid[row][s])); } }));
         }
       }
       wrap.append(grid,
         rxSlider('Batteria', 0, 1.5, 0.01, RX.drums.vol, pct, x => { RX.drums.vol = x; if (drumBus) drumBus.gain.value = x; }),
         rxSlider('Basso', 0, 1.5, 0.01, RX.drums.bassVol, pct, x => { RX.drums.bassVol = x; if (bassBus) bassBus.gain.value = x; }),
-        h('p', { class: 'small mut' }, 'Se i colpi non cadono a tempo: «× 2» o «÷ 2» per il tempo, «± 10 ms» per allinearli, «Sposta la battuta» se la cassa non cade sul primo battito, oppure «Tocca a tempo» quattro volte sul ritmo. Il basso suona la nota della tonalità: non segue gli accordi.'));
+        h('p', { class: 'small mut' }, 'Se la batteria va al doppio o a metà: «× 2» o «÷ 2». Se segue un altro ritmo: prova i tempi proposti o «Tocca a tempo» quattro volte sul ritmo. «Sposta la battuta» se la cassa non cade sul primo battito. Il basso suona la nota della tonalità, accordato come il brano: non segue gli accordi.'));
     }
   }
   return wrap;
