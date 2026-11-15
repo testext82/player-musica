@@ -30,6 +30,8 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.29: toccando il brano già in memoria mentre è in pausa riparte dall'inizio e suona (prima restava fermo); nel registro anche le regolazioni della batteria del Remix (× 2, ÷ 2, ± 10 ms, battuta, tocco).
+
 v1.28: **Remix** (pulsante «Remix» nel lettore). Tutto avviene sul telefono mentre il brano suona; il file su Dropbox non cambia e per ora le impostazioni non vengono salvate.
 - **Velocità e tono**: velocità da 0,5× a 1,5× mantenendo il tono, oppure «come un disco» (cambia anche il tono); tonalità ±6 semitoni a velocità invariata.
 - **Effetti**: riverbero, eco a tempo con il brano, filtro (sott'acqua / radio / telefono), distorsione, flanger, audio 8D; preset Slowed + riverbero, Nightcore, Lo-fi, Sott'acqua, Radio, Stadio, 8D.
