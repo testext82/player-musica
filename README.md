@@ -30,6 +30,13 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.26:
+- **Pagina dell'artista**: «Simili nella tua libreria» (calcolato sul telefono: ascoltati insieme, genere, anni); «Notizie e altri siti» con Google News, Wikipedia, artisti simili su Last.fm, discografia su Discogs, concerti su Songkick, scalette su setlist.fm, video su YouTube (solo link, senza referrer).
+- **Album che non hai**: solo quando tocchi «Cerca gli album che mancano» il player manda a MusicBrainz il nome dell'artista e riceve la discografia (titoli, anni, tipo); confronto con gli album su Dropbox, filtri In studio / EP / Dal vivo / Raccolte / Tutto, scelta dell'artista giusto se il nome è ambiguo. Risultati salvati sul telefono per 30 giorni (`mx_mb_v1`, al massimo 120 artisti). Al massimo una richiesta al secondo. La CSP ora permette anche `https://musicbrainz.org`.
+- **La coda continua da sola** (interruttore in Riproduzione): quando parte l'ultimo brano aggiunge fino a 25 brani simili della libreria; non con la ripetizione attiva.
+- **Temi**: Scuro, Chiaro, Sabbia, Automatico (segue l'iPhone). Il tema si applica prima di disegnare la pagina; la barra dell'ora resta nera (stile «black» delle app sulla schermata Home); la schermata di apertura resta nera.
+- Logo dell'app anche in Home.
+
 v1.25: niente ingrandimento della pagina con il doppio tocco (`touch-action: manipulation`), per esempio sulla barra in basso; lo zoom con due dita resta.
 
 v1.24: il brano partito in streaming si scarica in memoria subito (a schermo acceso, con il precarico attivo), prima del successivo; se l'album aveva già cominciato a scaricarlo, quel download continua invece di essere buttato. Uno spostamento chiesto mentre il download sta finendo (meno di ~6 s stimati) aspetta e poi va nel punto esatto; altrimenti resta quello stimato da Safari.
