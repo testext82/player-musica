@@ -1433,6 +1433,7 @@ function gapCommit(g) {
   log(`⏭ Senza pause → «${trackInfo(curTrack()).title}» · ${g.mode === 'memoria' ? 'dalla memoria' : 'dal lettore di riserva'} · avvio ${Math.round(lat)} ms${isHidden() ? ' · schermo spento' : ''}${RG.on ? ' · volume ' + rgDesc(curTrack()) : ''}`);
   gapMeasure(g);
   setTimeout(() => {                         // il lettore del brano finito si svuota appena ha finito
+    if (!g.endedAt) g.measured = true;       // misura valida solo se il brano finisce subito (il lettore viene poi riusato)
     if (oldBlob && !(curBlob && curBlob.url === oldBlob.url)) URL.revokeObjectURL(oldBlob.url);    // libero la memoria del brano finito
     if (old === audio || old.getAttribute('src') !== oldSrc) return;      // già riusato come riserva
     if (!old.ended && !old.paused && old.currentTime > 0) log(`   ↳ il brano precedente suonava ancora a ${fmtExact(old.currentTime)}: interrotto`);
