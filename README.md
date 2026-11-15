@@ -30,6 +30,8 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.25: niente ingrandimento della pagina con il doppio tocco (`touch-action: manipulation`), per esempio sulla barra in basso; lo zoom con due dita resta.
+
 v1.24: il brano partito in streaming si scarica in memoria subito (a schermo acceso, con il precarico attivo), prima del successivo; se l'album aveva già cominciato a scaricarlo, quel download continua invece di essere buttato. Uno spostamento chiesto mentre il download sta finendo (meno di ~6 s stimati) aspetta e poi va nel punto esatto; altrimenti resta quello stimato da Safari.
 
 v1.23: **spostamento preciso nei FLAC**. Dal registro (v1.22): dopo uno spostamento dentro il brano Safari dichiarava il secondo richiesto ma l'audio era qualche secondo indietro («finito a 2:32,0, durata del file 2:27,2»): contatore che finiva prima della musica, senza pause che tagliava la fine. Ora, con il file in memoria, il player trova il blocco audio esatto (ogni blocco FLAC porta il suo numero; tabella di ricerca se c'è, altrimenti stima e verifica) e dà a Safari una «fetta» del file (intestazione minima + audio da quel blocco, senza copiare dati): la posizione è sempre esatta. Il brano in corso, se è in streaming, viene scaricato in memoria anche lui a schermo acceso (dopo il successivo); alla ripresa all'apertura il brano si scarica subito e «▶» parte dal punto esatto. In streaming o a schermo spento resta lo spostamento di Safari: il brano viene segnato come «tempo stimato» e per lui il passaggio senza pause non viene usato. Se Safari non accetta la «fetta», si torna da soli al metodo di Safari.
