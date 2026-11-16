@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.40';
+const VERSION = '1.41';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -1275,7 +1275,7 @@ let audio = $('audio');      // il lettore attivo: può essere scambiato con que
 /* Lettore di riserva: tiene pronto (già collegato e con l'inizio caricato) il brano successivo.
    Con lo schermo acceso, ⏭ o un tocco sul brano successivo fanno solo partire questo lettore: niente attesa.
    A schermo spento iOS non permette di passare a un altro lettore: lì resta il passaggio sullo stesso lettore. */
-function makeSpare() { const el = document.createElement('audio'); el.id = 'audioSpare'; el.preload = 'auto'; el.setAttribute('playsinline', ''); el.setAttribute('x-webkit-airplay', 'allow'); return el; }
+function makeSpare() { const el = document.createElement('audio'); el.id = 'audioSpare'; el.muted = true; el.preload = 'auto'; el.setAttribute('playsinline', ''); el.setAttribute('x-webkit-airplay', 'allow'); return el; }
 let spare = makeSpare(); audio.after(spare);
 let SP = { file: null, t0: 0 }, spareUnlocked = false, autoNext = false;   // autoNext: passaggio a fine brano (non è un tuo gesto)
 let Q = { items: [], order: [], pos: -1, shuffle: false, repeat: 'off' };
@@ -1346,6 +1346,7 @@ function clearSpare() { if (spare.getAttribute('src')) { spare.removeAttribute('
 function loadSpare(t) {
   const f = fileOf(t); if (SP.file === f) return;
   const link = freshLink(f); if (!link) { tempLink(f).catch(() => {}); return; }   // riprovo al controllo successivo
+  spare.muted = true;                 // muta finché è di riserva: iOS non la deve prendere per il lettore «In riproduzione»
   spare.preload = 'auto'; setSrcOn(spare, link); try { spare.load(); } catch (e) {}
   SP = { file: f, t0: performance.now(), blob: null };
 }
@@ -1361,7 +1362,7 @@ function prepareSpare() {           // durante la riproduzione: il successivo, a
 // passa al lettore di riserva (solo a schermo acceso, su un tuo gesto)
 function swapToSpare(f, target, autoplay) {
   const old = audio, el = spare, ready = el.readyState;
-  audio = el; spare = old; el.id = 'audio'; old.id = 'audioSpare';
+  audio = el; spare = old; el.id = 'audio'; old.id = 'audioSpare'; el.muted = false;
   old.pause(); old.removeAttribute('src'); try { old.load(); } catch (e) {}
   SP = { file: null, t0: 0 };
   const oldBlob = curBlob; curBlob = null; if (oldBlob) URL.revokeObjectURL(oldBlob.url);
@@ -1678,6 +1679,7 @@ function gapFire() {
   el.addEventListener('playing', () => gapCommit(g), { once: true });
   try { if (el.currentTime > 0.05) el.currentTime = trackStart(g.nt); } catch (e) {}
   g.guard = setTimeout(() => gapFail(g, { name: 'nessun avvio in 2 s' }), 2000);
+  el.muted = false;
   const p = el.play();
   if (p && p.catch) p.catch(e => gapFail(g, e));
 }
@@ -1744,7 +1746,7 @@ function gapMeasure(g) {
   log(d >= 0 ? `   ↳ pausa tra i brani: ${d} ms` : `   ↳ nessuna pausa (sovrapposizione di ${-d} ms)`);
 }
 function doPlay() {
-  eqWake();
+  eqWake(); audio.muted = false;
   if (!spareUnlocked) { spareUnlocked = true; try { spare.load(); } catch (e) {} }   // primo gesto: iOS permette poi al lettore di riserva di caricare
   const p = audio.play();
   if (p && p.catch) p.catch(e => { log(`play() rifiutato: ${e.name}`); if (e.name === 'NotAllowedError' && !isHidden()) toast('Tocca ▶ per avviare'); setPP(); });
@@ -2067,6 +2069,11 @@ function bindAudio(el) {
 bindAudio(audio); bindAudio(spare);
 document.addEventListener('visibilitychange', () => {
   const music = () => audio.paused ? 'musica in pausa' : 'musica in riproduzione';
+  if (isHidden() && curTrack()) {
+    const say = () => { try { log(`Schermata di blocco: dichiaro «${navigator.mediaSession.playbackState}» a ${fmtTime(relTime())} · lettore ${audio.paused ? 'fermo' : 'in moto'} · ${curBlob ? 'dalla memoria' : 'streaming'} · riserva ${spare.getAttribute('src') ? 'carica' : 'vuota'}${spare.muted ? ' muta' : ''}`); } catch (e) {} };
+    reassertMediaSession(); say();
+    setTimeout(() => { if (isHidden() && !audio.paused) { reassertMediaSession(); say(); } }, 1500);
+  }
   if (isHidden()) { lastBeat = Date.now(); saveResume(true); if (ac) log(`Schermo spento con equalizzatore: motore audio «${ac.state}», ${music()}`); }
   else if (ac) { log(`Schermo acceso: motore audio «${ac.state}», ${music()}`); if (!audio.paused) eqWake(); }
   if (!isHidden()) prepareSpare();     // riacceso lo schermo, preparo subito il successivo

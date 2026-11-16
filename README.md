@@ -31,6 +31,8 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.41: **schermata di blocco: contatore che scorre anche per il brano avviato dall'app (tentativo)**. Dal registro: il brano avviato a schermo acceso (in streaming, con il lettore di riserva caricato) ha il contatore a scatti e niente animazione; quello partito a schermo spento va bene. Il lettore di riserva resta muto finché non tocca a lui (iOS non considera un lettore muto per «In riproduzione»); allo spegnimento dello schermo i dati vengono riconfermati e il registro scrive cosa è stato dichiarato a iOS.
+
 v1.40: **schermata di blocco: di nuovo il simbolo giusto**. Dal registro della v1.39: riquadro tornato, ma con ▶ mentre la musica suonava e contatore a scatti (iOS credeva la musica in pausa). Lo stato play/pausa torna dichiarato dall'app (come nella v1.37/1.38, dove il simbolo era giusto); il manifest resta senza `id`.
 
 v1.39: **schermata di blocco come prima**. Tolti l'`id` dal manifest (v1.38) e lo stato play/pausa forzato (v1.37): su iPhone, tolta l'altra web app dalla Home, il riquadro «In riproduzione» spariva. Restano la posizione rinfrescata e i comandi riconfermati a ogni partenza.
