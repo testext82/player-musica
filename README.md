@@ -31,6 +31,15 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.36: **la batteria parte prima e si carica subito**.
+- Analisi del ritmo mentre il brano si scarica: il file in arrivo si legge a pezzi (solo la parte già arrivata); dopo i primi 25-30 s analizzati ci sono battiti provvisori e la batteria parte, poi l'analisi definitiva li sostituisce. La batteria non va oltre la parte analizzata.
+- Alla prima partenza della batteria l'ascolto già fatto per l'aggancio non si butta più (prima ripartiva da zero): con la posizione stimata si aggancia in pochi secondi anche durante lo scaricamento.
+- Suoni veri e ritmi dei batteristi tenuti anche sul telefono (Cache API): dalla seconda volta pronti in meno di mezzo secondo, senza riscaricarli da Dropbox.
+- Corretto: «null is not an object (evaluating 'ctx.decodeAudioData')» se si spegneva la batteria mentre si caricavano i suoni veri.
+- Le scelte della batteria (suoni, ritmo, volumi, griglia) restano anche se l'app si riapre; l'accensione resta per sessione.
+- «Dal brano»: in un brano regolare senza colpi medi netti, rullante sul 2 e sul 4 (e lì niente cassa).
+- Nel pannello: quanto è scaricato il brano e a che punto è l'analisi.
+
 v1.35: **batteria a tempo e che si adatta alla canzone**.
 - Corretto: il «ritardo tipico» del dispositivo (tra contatore del lettore e suono, 15 ms su iPhone) veniva misurato anche dopo uno spostamento stimato da Safari, dove l'errore è della posizione (fino a mezzo secondo) e non del dispositivo; salvato (569 ms) spostava la batteria in tutti i brani non ancora agganciati. Ora si misura solo con la posizione esatta, valori oltre 250 ms si ignorano (anche quello già salvato).
 - Posizione stimata da Safari (streaming): appena il brano è in memoria la rendo esatta (spostamento preciso), e finché non è esatta né agganciata la batteria aspetta invece di suonare fuori tempo.
