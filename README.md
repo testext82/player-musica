@@ -31,7 +31,9 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
-v1.38: **schermata di blocco che apre Basalto e resta aggiornata**.
+v1.39: **schermata di blocco come prima**. Tolti l'`id` dal manifest (v1.38) e lo stato play/pausa forzato (v1.37): su iPhone, tolta l'altra web app dalla Home, il riquadro «In riproduzione» spariva. Restano la posizione rinfrescata e i comandi riconfermati a ogni partenza.
+
+v1.38 (ritirata in parte dalla v1.39): **schermata di blocco che apre Basalto e resta aggiornata**.
 - Il manifest ha ora un `id` proprio (`"basalto"`). Con più web app dello stesso sito nella schermata Home (es. «La mia spesa», anche lei su testext82.github.io) iOS, senza id, a volte associa il riquadro «In riproduzione» all'app sbagliata: il tocco apre l'altra app e il riquadro resta fermo (bug WebKit 267810; rimedio confermato: id esplicito con un nome semplice, non un percorso). iOS legge il manifest solo all'aggiunta alla Home: **va tolta e riaggiunta l'icona di Basalto** (prima «Sincronizza ora»; dopo vanno reinseriti App key e collegamento a Dropbox e le impostazioni del telefono).
 - A ogni partenza (anche dopo il cambio di lettore quando il motore audio si accende o si spegne) titolo, copertina e comandi vengono riconfermati a iOS; dopo ogni spostamento la posizione viene rimessa subito.
 
