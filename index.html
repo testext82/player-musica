@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.31';
+const VERSION = '1.32';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -2310,7 +2310,7 @@ const RX = {
   on: false, rate: 1, vinyl: false, semi: 0, preset: 'none',
   fx: { rev: { on: false, size: 0.5, mix: 0.35 }, echo: { on: false, div: '1/8', fb: 0.35, mix: 0.3 }, filt: { on: false, type: 'lp', freq: 0.35 },
         dist: { on: false, amt: 0.3 }, flang: { on: false, speed: 0.25, mix: 0.5 }, pan8: { on: false, speed: 0.15 } },
-  drums: { on: false, vol: 0.8, bassVol: 0.6, pattern: 'rock', grid: null },
+  drums: { on: false, vol: 0.8, bassVol: 0.6, pattern: 'rock', grid: null, sound: 'synth', groove: null },
 };
 const RXROWS = [['kick', 'Cassa'], ['snare', 'Rullante'], ['hat', 'Charleston'], ['ohat', 'Charl. aperto'], ['clap', 'Mani'], ['tom', 'Tom'], ['bass', 'Basso']];
 const RXPAT = {
@@ -2908,6 +2908,56 @@ async function rxKit() {
   };
   return KIT;
 }
+/* --- suoni veri e ritmi di batteristi ---
+   Stanno nella cartella _batteria di Dropbox (la libreria la ignora: non ci sono file audio). Se mancano, li prendo dalla copia
+   pubblica sul sito (licenze libere, vedi batteria/LEGGIMI.md) e, se il salvataggio su Dropbox è attivo, li copio lì. */
+const RXK = { kit: null, buf: null, ctx: null, grooves: null, loading: {}, err: '', info: '' };
+const BAT_DIR = '/_batteria/';
+async function rxFetchJson(name) {
+  try {
+    const tok = await getToken();
+    const r = await fetch(CONTENT + 'files/download', { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok, 'Dropbox-API-Arg': hdrJson({ path: BAT_DIR + name }) } });
+    if (r.ok) return { data: JSON.parse(await r.text()), from: 'Dropbox' };
+    if (r.status !== 409) throw new Error('Dropbox ' + r.status);
+  } catch (e) { if (!/409/.test(e.message)) log('Batteria: lettura da Dropbox non riuscita (' + e.message + '), uso la copia del sito'); }
+  const r = await fetch('batteria/' + name + '?v=' + VERSION); if (!r.ok) throw new Error('file ' + name + ' non trovato');
+  const txt = await r.text(), data = JSON.parse(txt);
+  if (canWrite()) {
+    try {
+      const tok = await getToken();
+      const u = await fetch(CONTENT + 'files/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': hdrJson({ path: BAT_DIR + name, mode: 'add', autorename: false, mute: true }) }, body: txt });
+      log(u.ok ? `Batteria: copiato ${name} nella cartella _batteria di Dropbox` : `Batteria: copia di ${name} su Dropbox non riuscita (${u.status})`);
+    } catch (e) { log('Batteria: copia su Dropbox non riuscita (' + e.message + ')'); }
+  }
+  return { data, from: 'sito' };
+}
+async function rxLoad(what) {
+  if (RXK.loading[what]) return RXK.loading[what];
+  const p = (async () => {
+    if (what === 'kit') {
+      if (RXK.buf && RXK.ctx === ac) return RXK.buf;
+      if (!RXK.kit) { const r = await rxFetchJson('batteria-muldjord.json'); RXK.kit = r.data; RXK.kitFrom = r.from; }
+      const ctx = ac, buf = {};
+      for (const [k, arr] of Object.entries(RXK.kit.suoni)) {
+        buf[k] = [];
+        for (const b64 of arr) { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); buf[k].push(await new Promise((res, rej) => { const q = ctx.decodeAudioData(u.buffer, res, rej); if (q && q.catch) q.catch(rej); })); }
+      }
+      if (ac !== ctx) throw new Error('motore audio cambiato');
+      RXK.buf = buf; RXK.ctx = ctx; log(`Batteria vera: ${RXK.kit.nome} · ${Object.values(buf).reduce((s, a) => s + a.length, 0)} colpi (da ${RXK.kitFrom})`); return buf;
+    }
+    if (!RXK.grooves) { const r = await rxFetchJson('ritmi-gmd.json'); RXK.grooves = r.data.ritmi.map(g => rxPrepGroove(g)); RXK.groovesFrom = r.from; log(`Ritmi di batteristi: ${RXK.grooves.length} (da ${r.from})`); }
+    return RXK.grooves;
+  })();
+  RXK.loading[what] = p;
+  try { return await p; } catch (e) { RXK.err = e.message; log('Batteria: ' + e.message); throw e; } finally { RXK.loading[what] = null; }
+}
+// un ritmo: per ogni movimento del giro, i colpi con la loro posizione dentro il movimento (0..1)
+function rxPrepGroove(g) {
+  const L = g.battute * 4, by = Array.from({ length: L }, () => []);
+  for (const [pos, ins, vel] of g.eventi) { const p = ((pos % L) + L) % L, q = Math.floor(p); by[q].push([p - q, ins, vel]); }
+  return { ...g, L, by };
+}
+const rxGroove = () => RX.drums.groove && RXK.grooves ? RXK.grooves.find(g => g.id === RX.drums.groove) : null;
 let drumBus = null, bassBus = null;
 const DS = { next: null, off: null, srcs: [], timer: null, rate: 1, beatKey: '', base: null, plan: '' };
 function drumsLive() { return RX.on && RX.drums.on && !!ac && !!KIT; }
@@ -2922,7 +2972,8 @@ function rxTopChords() {
   if (!RXA || !RXA.roots) return ''; const n = new Array(12).fill(0); for (const r of RXA.roots) n[r]++;
   return n.map((c, p) => [c, p]).filter(([c]) => c >= RXA.roots.length * 0.08).sort((a, b) => b[0] - a[0]).slice(0, 4).map(([, p]) => NOTE_IT[p]).join(', ');
 }
-function playHit(row, when, len, at) {
+const RXVEL = { kick: 108, snare: 104, hat: 78, ohat: 84, tom: 96, ftom: 96, crash: 100, ride: 80 };
+function playHit(row, when, len, at, vel) {
   if (row === 'bass') {
     const b = rxBeat(); if (!b) return;
     const pc = rxRootAt(at), midi = 36 + (pc != null ? pc : b.key) + (b.tune || 0) / 100, f = 440 * Math.pow(2, (midi - 69) / 12), o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
@@ -2930,7 +2981,14 @@ function playHit(row, when, len, at) {
     g.gain.exponentialRampToValueAtTime(0.0008, when + len);
     o.connect(lp); lp.connect(g); g.connect(bassBus); o.start(when); o.stop(when + len + 0.05); DS.srcs.push({ n: o, at: when }); return;
   }
-  const s = ac.createBufferSource(); s.buffer = KIT[row]; s.connect(drumBus); s.start(when); DS.srcs.push({ n: s, at: when });
+  const real = RX.drums.sound === 'real' && RXK.buf && RXK.ctx === ac ? RXK.buf[row] : null;
+  const s = ac.createBufferSource();
+  if (real) {
+    const v = vel || RXVEL[row] || 100, g = ac.createGain();
+    s.buffer = real[Math.min(real.length - 1, Math.floor(v / 128 * real.length))]; g.gain.value = 0.35 + 0.65 * v / 127;
+    s.connect(g); g.connect(drumBus);
+  } else { const sb = KIT[row] || KIT[{ ftom: 'tom', ride: 'hat', crash: 'ohat' }[row]]; if (!sb) return; s.buffer = sb; s.connect(drumBus); }
+  s.start(when); DS.srcs.push({ n: s, at: when });
 }
 const rxBeatAt = (times, s) => { let lo = 0, hi = times.length; while (lo < hi) { const m = (lo + hi) >> 1; if (times[m] <= s) lo = m + 1; else hi = m; } return lo - 1; };   // ultimo battito ≤ s
 function drumTick() {
@@ -2938,7 +2996,7 @@ function drumTick() {
   const t = curTrack();
   if (!t || !rxReady() || audio.paused || seeking || seekWait || GP && GP.state === 'starting') { if (DS.srcs.length || DS.next != null) drumStopAll(); return; }
   const b = rxBeat(), times = RXA.times, rate = audio.playbackRate || 1, songNow = absNow(), acNow = ac.currentTime;
-  const est = acNow - songNow / rate, key = fileOf(t) + '|' + rate, plan = RXA.ver + '|' + b.down + '|' + b.nudge;
+  const est = acNow - songNow / rate, key = fileOf(t) + '|' + rate, plan = RXA.ver + '|' + b.down + '|' + b.nudge + '|' + RX.drums.groove + '|' + RX.drums.sound;
   if (DS.beatKey !== key || DS.off == null || Math.abs(est - DS.off) > 0.25) { drumStopAll(); DS.off = est; DS.beatKey = key; }   // altro brano, salto, velocità: riparto
   else DS.off += (est - DS.off) * 0.05;                               // il tempo del lettore «trema» un po': lo smusso
   if (DS.plan !== plan) { drumCancel(0.004); DS.next = null; DS.plan = plan; }      // battiti rifatti o spostati: riprogrammo
@@ -2955,9 +3013,12 @@ function drumTick() {
     const k = g >> 2, j = g & 3; if (k + 1 >= times.length) break;
     const len = times[k + 1] - times[k], st = times[k] + j / 4 * len + nud, when = base + st / rate + extra;
     if (when > acNow + ahead) break;
+    const pos = (((k - b.down) % 4 + 4) % 4) * 4 + j, gr = rxGroove();
+    if (gr && j === 0) for (const [fr, ins, vel] of gr.by[((k - b.down) % gr.L + gr.L) % gr.L]) {     // ritmo di un batterista: i suoi colpi dentro questo movimento
+      const w = base + (times[k] + fr * len + nud) / rate + extra; if (w >= acNow - 0.005) playHit(ins, w, 0.3, st, vel);
+    }
     if (when < acNow - 0.005) continue;
-    const pos = (((k - b.down) % 4 + 4) % 4) * 4 + j;
-    for (const [row] of RXROWS) if (RX.drums.grid[row][pos]) playHit(row, when, len / 2 / rate, st);
+    for (const [row] of RXROWS) if (RX.drums.grid[row][pos] && (!gr || row === 'bass')) playHit(row, when, len / 2 / rate, st);
   }
   DS.next = g;
   if (DS.srcs.length > 200) DS.srcs = DS.srcs.filter(s => s.at > acNow - 1);
@@ -2983,7 +3044,7 @@ function rxSync() {
   if (ac) {
     rxChain();
     if (drumBus) { drumBus.gain.value = RX.drums.vol; bassBus.gain.value = RX.drums.bassVol; }
-    if (RX.on && RX.drums.on) { rxListen(); rxKit().then(() => { rxEnsureAnalysis(); rxDrumLoop(); }).catch(e => log('Batteria non disponibile: ' + e.message)); }
+    if (RX.on && RX.drums.on) { rxListen(); rxKit().then(() => { rxEnsureAnalysis(); rxDrumLoop(); if (RX.drums.sound === 'real' && RXK.ctx !== ac) rxLoad('kit').catch(() => {}); }).catch(e => log('Batteria non disponibile: ' + e.message)); }
     else { rxUnlisten(); rxDrumLoop(); }
   } else rxDrumLoop();
   updatePosition();
@@ -3084,10 +3145,27 @@ function rxPanel() {
           if (rxTaps.length >= 4) { const iv = rxTaps.slice(1).map((x, i) => x - rxTaps[i]).sort((a, c) => a - c), med = iv[Math.floor(iv.length / 2)]; rxTaps = []; rxRetrack(med * BT_FPS, `tempo dal tocco ${fmtBpm(60 / med)}`); toast(`Rifaccio i battiti a circa ${Math.round(60 / med)} BPM`); }
           else toast(`Tocca ancora (${rxTaps.length} di 4)`);
         })));
-      wrap.append(h('div', { class: 'eqp' }, ...Object.entries(RXPATN).map(([k, n]) => rxChip(RX.drums.pattern === k, n, () => { RX.drums.pattern = k; RX.drums.grid = rxGridFrom(k); drumCancel(0.004); DS.next = null; refreshRx(); }))));
+      const replan = () => { drumCancel(0.004); DS.next = null; refreshRx(); };
+      // suoni: sintetici (creati dall'app) o batteria vera (campioni)
+      wrap.append(h('div', { class: 'rxsec' }, 'Suoni'), h('div', { class: 'eqp' },
+        rxChip(RX.drums.sound !== 'real', 'Sintetici', () => { RX.drums.sound = 'synth'; replan(); }),
+        rxChip(RX.drums.sound === 'real', RXK.loading.kit ? 'Batteria vera…' : 'Batteria vera', () => {
+          RX.drums.sound = 'real'; replan();
+          rxLoad('kit').then(replan).catch(e => { toast('Suoni non disponibili: ' + e.message); RX.drums.sound = 'synth'; replan(); });
+        })));
+      // ritmo: griglia (ritmi pronti o fatti a mano) oppure un ritmo suonato da un batterista
+      const gr = rxGroove();
+      wrap.append(h('div', { class: 'rxsec' }, 'Ritmo'), h('div', { class: 'eqp' }, ...Object.entries(RXPATN).map(([k, n]) => rxChip(!gr && RX.drums.pattern === k, n, () => { RX.drums.groove = null; RX.drums.pattern = k; RX.drums.grid = rxGridFrom(k); replan(); }))));
+      if (!RXK.grooves) wrap.append(h('div', { class: 'eqp' }, rxChip(false, RXK.loading.grooves ? 'Carico i ritmi…' : 'Ritmi suonati da batteristi…', () => { rxLoad('grooves').then(replan).catch(e => toast('Ritmi non disponibili: ' + e.message)); refreshRx(); })));
+      else for (const grp of [...new Set(RXK.grooves.map(g => g.gruppo))]) {
+        wrap.append(h('p', { class: 'small mut', style: 'margin:0' }, grp), h('div', { class: 'eqp' }, ...RXK.grooves.filter(g => g.gruppo === grp).map(g =>
+          rxChip(gr && gr.id === g.id, g.nome, () => { RX.drums.groove = g.id; log(`Remix: ritmo «${g.nome}» (${g.battute} battute, suonato a ${g.bpm} BPM)`); replan(); }))));
+      }
+      if (gr) wrap.append(h('p', { class: 'small', style: 'margin:0' }, `«${gr.nome}»: ${gr.battute} battute suonate da un batterista (in origine a ${gr.bpm} BPM), adattate ai battiti del brano. Il basso segue la riga «Basso» della griglia.`));
       const grid = h('div', { class: 'rxgrid', role: 'grid', 'aria-label': 'Sequenza della batteria, 16 passi' });
       for (const [row, name] of RXROWS) {
         grid.append(h('span', { class: 'rxl' }, name));
+        if (gr && row !== 'bass') { grid.lastChild.remove(); continue; }
         for (let s = 0; s < 16; s++) {
           const on = RX.drums.grid[row][s];
           grid.append(h('button', { class: 'rxc' + (on ? ' on' : '') + (s % 4 === 0 ? ' b' : ''), 'data-s': s, 'aria-label': `${name}, passo ${s + 1}`, 'aria-pressed': on ? 'true' : 'false',
@@ -3097,7 +3175,8 @@ function rxPanel() {
       wrap.append(grid,
         rxSlider('Batteria', 0, 1.5, 0.01, RX.drums.vol, pct, x => { RX.drums.vol = x; if (drumBus) drumBus.gain.value = x; }),
         rxSlider('Basso', 0, 1.5, 0.01, RX.drums.bassVol, pct, x => { RX.drums.bassVol = x; if (bassBus) bassBus.gain.value = x; }),
-        h('p', { class: 'small mut' }, 'Se la batteria va al doppio o a metà: «× 2» o «÷ 2». Se segue un altro ritmo: prova i tempi proposti o «Tocca a tempo» quattro volte sul ritmo. «Sposta la battuta» se la cassa non cade sul primo battito. Il basso suona la nota della tonalità, accordato come il brano: non segue gli accordi.'));
+        h('p', { class: 'small mut' }, 'Se la batteria va al doppio o a metà: «× 2» o «÷ 2». Se segue un altro ritmo: prova i tempi proposti o «Tocca a tempo» quattro volte sul ritmo. «Sposta la battuta» se la cassa non cade sul primo battito. Il basso segue gli accordi del brano (solo la nota principale), accordato come il brano.'),
+        (RX.drums.sound === 'real' || gr) ? h('p', { class: 'small mut' }, [RX.drums.sound === 'real' && RXK.kit ? `Suoni: ${RXK.kit.nome}, ${RXK.kit.autore} (${RXK.kit.licenza}).` : '', gr && RXK.grooves ? 'Ritmi: Groove MIDI Dataset, Google Magenta (CC BY 4.0).' : ''].filter(Boolean).join(' ')) : '');
     }
   }
   return wrap;

@@ -30,6 +30,11 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.32: **batteria vera e ritmi di batteristi** nel Remix.
+- «Suoni: Batteria vera»: MuldjordKit (Tama Superstar, CC BY 4.0), 19 colpi con 2–3 intensità (mix stereo dei microfoni fatto per Basalto).
+- «Ritmi suonati da batteristi»: 30 ritmi da 2–4 battute del Groove MIDI Dataset di Google Magenta (CC BY 4.0) — punk, rock, pop, funk, hip hop, disco, reggae, soul, jazz, samba, country… — con le imprecisioni umane, adattati battito per battito al brano. Il basso resta sulla griglia e segue gli accordi.
+- I file stanno nella cartella `_batteria` di Dropbox (la libreria la ignora). Se mancano, l'app usa la copia pubblica in `batteria/` del sito e, con il salvataggio attivo, la copia su Dropbox; si possono aggiungere altri kit o ritmi nello stesso formato. Crediti in `batteria/LEGGIMI.md`.
+
 v1.31: **batteria del Remix sui brani veri** (provata su tre brani di 39/Smooth, confrontati con madmom).
 - Scelta del livello del tempo: se a un altro livello (doppio, metà, altri picchi) cassa e rullante si alternano battito per battito molto più chiaramente, è quello giusto. Nel punk veloce prima l'app sceglieva 101 o 133 BPM invece di 200: ora 202, 200 e 185 BPM, con il 95–97% dei battiti uguali a madmom.
 - **Basso che segue gli accordi**: per ogni battito l'app riconosce la fondamentale dell'accordo (basso del brano + note dell'accordo, sequenza scelta con Viterbi) e il basso la suona, intonato con il brano. Nel pannello: «accordi Si, La, Fa♯».
