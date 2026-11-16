@@ -31,6 +31,12 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.35: **batteria a tempo e che si adatta alla canzone**.
+- Corretto: il «ritardo tipico» del dispositivo (tra contatore del lettore e suono, 15 ms su iPhone) veniva misurato anche dopo uno spostamento stimato da Safari, dove l'errore è della posizione (fino a mezzo secondo) e non del dispositivo; salvato (569 ms) spostava la batteria in tutti i brani non ancora agganciati. Ora si misura solo con la posizione esatta, valori oltre 250 ms si ignorano (anche quello già salvato).
+- Posizione stimata da Safari (streaming): appena il brano è in memoria la rendo esatta (spostamento preciso), e finché non è esatta né agganciata la batteria aspetta invece di suonare fuori tempo.
+- Aggancio con posizione esatta: solo tra i ritardi possibili (da −80 a +350 ms), preferendo quello tipico; niente più agganci a un battito di distanza. Se per un po' non lo trova, prova lontano con criteri più severi.
+- Ritmo **«Dal brano»** (predefinito): dagli accenti dell'analisi (bassi, medi, acuti) su un giro di una o due battute: cassa e basso dove il brano batte sui bassi, rullante sui colpi medi-acuti netti, charleston a ottavi o sedicesimi; volume che segue il brano (più piano nelle parti calme). Funziona anche con ritmi irregolari (prova: 3+3+4+3+3 ottavi, 5 accenti su 5).
+
 v1.34: **salva il remix su Dropbox** (Remix › Salva il remix › «Salva su Dropbox»).
 - Crea un FLAC nuovo nella cartella `Remix` (album «Remix», artista dell'album «Artisti vari»; titolo «… (Remix)», poi «(Remix 2)»…), alla frequenza del brano originale, 24 bit, con copertina, tag e una descrizione delle modifiche. Il brano originale non cambia.
 - Contiene quello che si sente: velocità, tonalità, effetti, equalizzatore, batteria e basso. La velocità senza cambio di tono usa un vocoder di fase con fasi agganciate ai picchi e riallineate sugli attacchi; il cambio di tono un ricampionamento sinc (Kaiser). Eco e riverbero continuano senza giunture tra i pezzi e finiscono con la loro coda.
