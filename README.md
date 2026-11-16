@@ -31,6 +31,13 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.37: **tonalità esatta, ritmi in shuffle, schermata di blocco**.
+- Tonalità dal vivo con un modulo nuovo (`rx-tono.js`, AudioWorklet): lo stesso vocoder di fase + ricampionamento del salvataggio, tono esatto (prova: 440 Hz → 493,9 Hz con +2) e ritardo fisso noto (113-139 ms), compensato per la batteria. Il vecchio metodo a «grani» (tono approssimato a ±20 Hz e ronzio) resta solo come riserva.
+- iPhone: il motore audio acceso da un cursore (tonalità, velocità) restava fermo e la musica muta finché non si premeva play. Ora si sveglia al rilascio di ogni tocco (anche con timer brevi, a cui Safari «presta» il tocco).
+- Shuffle / 12/8: riconosciuto dall'analisi (attacchi a 1/3 e 2/3 del battito invece che a metà); se il tempo trovato era il doppio sugli ottavi terzinati, viene dimezzato. La batteria suona terzinata (ottavi a 2/3, sedicesimi a 1/3 e 5/6), anche i ritmi fissi e quelli dei batteristi; «Dal brano» legge gli accenti nelle posizioni terzinate. Scelta a mano: «Dritto» / «Terzinato (shuffle)».
+- Aggancio con posizione esatta: il ritardo del dispositivo (stabile) vale più di un aggancio debole; uno che se ne discosta di oltre 12 ms si accetta solo se molto netto (somiglianza ≥ 0,5). Il ritardo tipico si aggiorna solo da agganci con somiglianza ≥ 0,5.
+- Schermata di blocco: stato (in riproduzione / in pausa) e posizione aggiornati di continuo (con il motore audio iOS non li ricava da solo).
+
 v1.36: **la batteria parte prima e si carica subito**.
 - Analisi del ritmo mentre il brano si scarica: il file in arrivo si legge a pezzi (solo la parte già arrivata); dopo i primi 25-30 s analizzati ci sono battiti provvisori e la batteria parte, poi l'analisi definitiva li sostituisce. La batteria non va oltre la parte analizzata.
 - Alla prima partenza della batteria l'ascolto già fatto per l'aggancio non si butta più (prima ripartiva da zero): con la posizione stimata si aggancia in pochi secondi anche durante lo scaricamento.

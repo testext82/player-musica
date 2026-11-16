@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.36';
+const VERSION = '1.37';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -1980,12 +1980,14 @@ function onVirtualEnd(t) {
   } else { if (isHidden()) pendingAuto = Date.now(); autoNext = true; try { loadAndPlay(n); } finally { autoNext = false; } }
 }
 
+let lastPosAt = 0;
 function bindAudio(el) {
   const on = (ev, fn) => el.addEventListener(ev, e => { if (el === audio) fn(e); });
   on('durationchange', checkDuration);
+  on('ratechange', () => updatePosition());
   on('loadedmetadata', () => { tailCheck(); checkDuration(); if (startMeas && startMeas.metaMs == null && loadedFile === startMeas.file) startMeas.metaMs = performance.now() - startMeas.t0; applyPendingSeek(); updateProgress(); updatePosition(); });
   on('playing', () => {
-    tailCheck(); setPP(); if (audio._approx) approxLog();
+    tailCheck(); setPP(); updatePosition(); if (audio._approx) approxLog();
     if (RX.on) { applyRate(audio); if (RX.drums.on) { DS.next = null; DS.off = null; rxEnsureAnalysis(); if (rxOpen) refreshRx(); } }
     if (!curTrack()) return;
     if (!srcPlayingAt) srcPlayingAt = Date.now();
@@ -2000,7 +2002,7 @@ function bindAudio(el) {
   on('pause', () => {
     if (GP && GP.state === 'starting') { actBy = null; return; }          // il brano finisce mentre parte il successivo
     if (GP && !audio.ended) gapCancel();
-    setPP(); saveResume(true);
+    setPP(); saveResume(true); updatePosition();
     if (audio.getAttribute('src') && audio.readyState > 0 && !audio.ended && actBy !== 'fine della coda') {
       const det = actBy ? '' : ` · ${curBlob ? 'dalla memoria' : 'streaming'} a ${fmtTime(relTime())} · rete ${audio.networkState} · dati ${audio.readyState}${audio.error ? ' · errore ' + audio.error.code : ''}${ac ? ' · motore «' + ac.state + '»' : ''}${PRE ? ' · precarico ' + (PRE.ready ? 'pronto' : 'in corso') : ''}`;
       log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}${det}`); pausedLogged = true;
@@ -2018,6 +2020,7 @@ function bindAudio(el) {
     tailCheck();
     if (t && t.end != null && !seeking && absNow() >= t.end - 0.12) onVirtualEnd(t);
     updateProgress(); if (Date.now() - lastSave > 5000) saveResume();
+    if (Date.now() - lastPosAt > 10000) { lastPosAt = Date.now(); updatePosition(); }     // schermata di blocco: posizione rinfrescata
     noteListening();
     if (Date.now() - lastPreCheck > 1000) { lastPreCheck = Date.now(); maybeContinueQueue(); maybePreload(); prepareSpare(); maybeFetchCurrent(); if (RX.on && RX.drums.on) { rxEnsureAnalysis(); if (rxOpen) rxPaintDl(); } }
     gapTick();
@@ -2124,7 +2127,9 @@ function updateMediaSession() {
   setupMediaSession(); updatePosition();
 }
 function updatePosition() {
-  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  if (!('mediaSession' in navigator)) return;
+  try { navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing'; } catch (e) {}
+  if (!navigator.mediaSession.setPositionState) return;
   const d = relDur(); if (!d || !isFinite(d)) return;
   try { navigator.mediaSession.setPositionState({ duration: d, playbackRate: audio.playbackRate || 1, position: Math.min(relTime(), d) }); } catch (e) {}
 }
@@ -2175,7 +2180,7 @@ function ensureGraph() {
     drumBus = ac.createGain(); drumBus.gain.value = RX.drums.vol; drumBus.connect(fxMaster);
     bassBus = ac.createGain(); bassBus.gain.value = RX.drums.bassVol; bassBus.connect(fxMaster);
     eqFilters[eqFilters.length - 1].connect(fxIn);
-    eqWired = null; wireEq(); rxChain();
+    eqWired = null; wireEq(); rxChain(); rxToneLoad();
     for (const el of [audio, spare]) attachEl(el);
     const ctx = ac;
     let prevState = ctx.state;
@@ -2203,6 +2208,14 @@ function applyEq() {
   wireEq();
 }
 function eqWake() { if (ac && ac.state !== 'running') ac.resume().catch(() => {}); }
+// iOS accende il motore audio solo dentro un tocco. I cursori (tonalità, velocità…) lo creano nell'evento «change», che per
+// Safari non è un tocco: il motore restava fermo e la musica muta finché non si premeva play. Al rilascio di ogni tocco
+// riprovo subito e dopo un attimo (Safari «presta» il tocco ai timer brevi), quando il cursore ha già acceso il motore.
+function gestureWake() {
+  const wake = () => { if (ac && ac.state !== 'running' && ac.state !== 'closed' && !audio.paused) ac.resume().then(() => { if (ac && ac.state === 'running') log('Motore audio acceso dal tocco'); }).catch(() => {}); };
+  wake(); setTimeout(wake, 120); setTimeout(wake, 500);
+}
+for (const ev of ['touchend', 'pointerup', 'click', 'keyup']) document.addEventListener(ev, gestureWake, { capture: true, passive: true });
 // Una volta collegato a Web Audio un elemento <audio> non può più staccarsene:
 // per tornare al lettore normale lo sostituisco con uno nuovo e riprendo dallo stesso punto.
 function dropEqEngine(keepPlaying) {
@@ -2353,7 +2366,19 @@ function rxChain() {
   const lfo = (freq, depth, target) => { const o = ac.createOscillator(); o.frequency.value = freq; const g = G(depth); o.connect(g); g.connect(target); o.start(); RXN.srcs.push(o); RXN.all.push(o); return { o, g }; };
   let cur = fxIn;
   const fx = RX.fx;
-  if (RX.on && RX.semi) cur = pitchShifter(cur, Math.pow(2, RX.semi / 12), N);
+  RXN.toneLat = 0;
+  if (RX.on && RX.semi) {
+    // tonalità: modulo rx-tono.js (vocoder di fase + ricampionamento, tono esatto, ritardo fisso e noto);
+    // finché il modulo non è caricato, o se manca, il vecchio spostamento a «grani» (tono approssimato)
+    const p = Math.pow(2, RX.semi / 12);
+    if (RXT.ctx === ac) {
+      try {
+        const sr = ac.sampleRate, Nn = sr > 60000 ? 8192 : 4096, lat = rxToneLat(p, Nn);
+        const w = N(new AudioWorkletNode(ac, 'rx-tono', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { ratio: p, N: Nn, lat } }));
+        cur.connect(w); cur = w; RXN.toneLat = lat / sr;
+      } catch (e) { log('Tonalità: modulo non disponibile (' + e.message + '), uso il metodo semplice'); cur = pitchShifter(cur, p, N); RXN.toneLat = 0.05; }
+    } else { cur = pitchShifter(cur, p, N); RXN.toneLat = 0.05; rxToneLoad(); }
+  }
   if (RX.on && fx.filt.on) {
     const f = N(ac.createBiquadFilter()); RXN.filt = f; rxFilterParams(); cur.connect(f); cur = f;
   }
@@ -2403,6 +2428,16 @@ function reverbIR(size) {
   return b;
 }
 // cambio di tono senza cambiare la velocità: due linee di ritardo modulate e dissolte a vicenda
+// ritardo del modulo di tonalità (in campioni): il tempo che serve al vocoder per avere il suono pronto, più un margine
+function rxToneLat(p, Nn) { const B = Nn / 2, H = Nn / 4, W = Math.ceil(24 / (Math.min(1, 1 / p) * (p > 1 ? 0.92 : 0.97))); return Math.ceil((W + B + H) / Math.min(p, 1) + B + 256); }
+const RXT = { ctx: null, loading: null };
+function rxToneLoad() {
+  if (!ac || !ac.audioWorklet || RXT.ctx === ac || RXT.loading === ac) return;
+  const ctx = ac; RXT.loading = ctx;
+  ctx.audioWorklet.addModule('rx-tono.js?v=' + VERSION).then(() => { RXT.ctx = ctx; RXT.loading = null; if (ctx === ac && RX.on && RX.semi) { rxChain(); log('Tonalità: modulo di qualità pronto'); } })
+    .catch(e => { RXT.loading = null; log('Tonalità: modulo non caricato (' + e.message + ')'); });
+}
+// vecchio metodo (riserva): due «grani» che scorrono in una linea di ritardo; tono approssimato (±20 Hz) e un leggero ronzio
 function pitchShifter(src, ratio, N) {
   const sr = ac.sampleRate, T = 0.1, fadeT = 0.05, len = Math.round(T * sr), fadeLen = Math.round(fadeT * sr);
   const up = ratio > 1, ramp = ac.createBuffer(1, len, sr), fade = ac.createBuffer(1, len, sr), rd = ramp.getChannelData(0), fd = fade.getChannelData(0);
@@ -2795,21 +2830,45 @@ async function analyzeRhythm(t) {
   const prev = RHY[f] && RHY[f].v === 3 && RHY[f].rev === t.rev ? RHY[f] : null, old = prev && !prev.prov ? prev : null, on = btOnset(st);
   const res = old && old.hint ? btBeatsFrom(st, on, old.hint) : btBeatsAuto(st, on); if (!res) throw new Error('non trovo un ritmo regolare in questo brano');
   const k = btKey(st.key, st.sr);
-  const mult = old && old.mult || 1, eff = rxMult(res.times, res.down, mult);
+  const fe = btFeel(on, res, old && old.mult || 1, !(old && (old.hint || old.user))), mult = fe.mult, eff = fe.eff;
+  const swing = old && old.swingUser ? old.swing : fe.swing;
   const r = { v: 3, rev: t.rev, bpm: res.bpm * mult, conf: res.conf, drift: res.drift * mult, key: k.key, minor: k.minor, keyR: k.keyR, tune: k.tune,
-    down: old ? old.down : eff.down, nudge: old ? old.nudge || 0 : prev ? prev.nudge || 0 : 0, hint: old ? old.hint || null : null, mult, at: Date.now() };
+    down: old && !fe.halved ? old.down : eff.down, nudge: old ? old.nudge || 0 : prev ? prev.nudge || 0 : 0, hint: old ? old.hint || null : null, mult, at: Date.now(),
+    swing, swingUser: !!(old && old.swingUser), user: !!(old && old.user) };
   RHY[f] = r; const ks = Object.keys(RHY); if (ks.length > 300) delete RHY[ks[0]]; saveJSON(K.rhythm, RHY);
   RXA = { file: f, st, on, base: res, times: eff.times, P: res.P / mult, cands: btCands(on), ver: (RXA ? RXA.ver : 0) + 1, cal: st.cal, D, roots: btChords(st.key, k.tune, res.times) };
   if (prov) log(`Remix: analisi completata mentre suonava (la batteria partita con i battiti provvisori ora usa quelli definitivi)`);
-  log(`Remix: «${trackInfo(t).title}» · ${fmtBpm(r.bpm)} BPM${r.drift > 1.5 ? ` (varia di ±${Math.round(r.drift)})` : ''} · ${res.times.length} battiti · tonalità ${NOTE_IT[r.key]} ${r.minor ? 'minore' : 'maggiore'}${Math.abs(r.tune) >= 15 ? ` (accordatura ${r.tune > 0 ? '+' : ''}${r.tune} cent)` : ''} · accordi ${rxTopChords()} · affidabilità ${rxConfTxt(r)} · altri tempi possibili ${RXA.cands.filter(P => Math.abs(Math.log(P / res.P)) > 0.04).slice(0, 3).map(P => fmtBpm(6000 / P)).join(', ')} · ${Math.round(performance.now() - t0)} ms`);
+  log(`Remix: «${trackInfo(t).title}» · ${fmtBpm(r.bpm)} BPM${r.drift > 1.5 ? ` (varia di ±${Math.round(r.drift)})` : ''}${r.swing ? ` · terzinato (shuffle${fe.halved ? `, tempo dimezzato da ${fmtBpm(res.bpm * mult * 2)}` : ''})` : ''} · ${eff.times.length} battiti · tonalità ${NOTE_IT[r.key]} ${r.minor ? 'minore' : 'maggiore'}${Math.abs(r.tune) >= 15 ? ` (accordatura ${r.tune > 0 ? '+' : ''}${r.tune} cent)` : ''} · accordi ${rxTopChords()} · affidabilità ${rxConfTxt(r)} · altri tempi possibili ${RXA.cands.filter(P => Math.abs(Math.log(P / res.P)) > 0.04).slice(0, 3).map(P => fmtBpm(6000 / P)).join(', ')} · ${Math.round(performance.now() - t0)} ms`);
   return r;
+}
+/* Terzinato (shuffle, 12/8): dentro il battito gli attacchi stanno a 1/3 e 2/3 invece che a metà. Con un ritmo così una
+   batteria «dritta» va fuori tempo a ogni controtempo; e spesso il tempo viene trovato al doppio (sugli ottavi terzinati,
+   che non sono equidistanti). Qui guardo dove cadono gli attacchi e, se serve, scelgo la metà del tempo. */
+function btSwing(on, times) {
+  const at = t => { const i = Math.round(t * BT_FPS); let m = 0; for (let d = -1; d <= 1; d++) { const v = on[i + d]; if (v > m) m = v; } return m; };
+  let s13 = 0, s23 = 0, s12 = 0, s14 = 0, s34 = 0, n = 0;
+  for (let k = 0; k + 1 < times.length; k++) {
+    const a = times[k], L = times[k + 1] - a; if (L < 0.25 || L > 1.6) continue;
+    s13 += at(a + L / 3); s23 += at(a + 2 * L / 3); s12 += at(a + L / 2); s14 += at(a + L / 4); s34 += at(a + 3 * L / 4); n++;
+  }
+  if (n < 16) return { tern: false, ratio: 1 };
+  const tri = (s13 + s23) / 2, bin = Math.max(s12, (s14 + s34) / 2);
+  return { tern: s23 > 1.4 * s12 && tri > 1.15 * bin, ratio: s23 / Math.max(1e-9, s12) };
+}
+// livello del tempo e terzine: se gli «ottavi» trovati sono in realtà terzinati, prendo un battito sì e uno no
+function btFeel(on, res, mult, auto) {
+  const eff = rxMult(res.times, res.down, mult), sw = btSwing(on, eff.times);
+  if (sw.tern || !auto || res.bpm * mult < 110) return { mult, eff, swing: sw.tern, ratio: sw.ratio };
+  const half = rxMult(res.times, res.down, mult / 2), sh = btSwing(on, half.times);
+  if (sh.tern) return { mult: mult / 2, eff: half, swing: true, ratio: sh.ratio, halved: true };
+  return { mult, eff, swing: false, ratio: sw.ratio };
 }
 // battiti provvisori sulla parte già scaricata e analizzata (fino a «upto» secondi): la batteria non va oltre
 function rxProvisional(t, st, upto) {
   const f = fileOf(t), on = btOnset(st), prev = RHY[f] && RHY[f].v === 3 && RHY[f].rev === t.rev ? RHY[f] : null, old = prev && !prev.prov ? prev : null;
   const res = old && old.hint ? btBeatsFrom(st, on, old.hint) : btBeatsAuto(st, on); if (!res || res.times.length < 8) return;
-  const k = btKey(st.key, st.sr), mult = old && old.mult || 1, eff = rxMult(res.times, res.down, mult);
-  if (!old) RHY[f] = { v: 3, rev: t.rev, prov: true, bpm: res.bpm, conf: res.conf, drift: res.drift, key: k.key, minor: k.minor, keyR: k.keyR, tune: k.tune, down: eff.down, nudge: prev ? prev.nudge || 0 : 0, hint: null, mult: 1, at: Date.now() };
+  const k = btKey(st.key, st.sr), fe = btFeel(on, res, old && old.mult || 1, !(old && (old.hint || old.user))), mult = fe.mult, eff = fe.eff;
+  if (!old) RHY[f] = { v: 3, rev: t.rev, prov: true, bpm: res.bpm * mult, conf: res.conf, drift: res.drift * mult, key: k.key, minor: k.minor, keyR: k.keyR, tune: k.tune, down: eff.down, nudge: prev ? prev.nudge || 0 : 0, hint: null, mult, at: Date.now(), swing: prev && prev.swingUser ? prev.swing : fe.swing, swingUser: !!(prev && prev.swingUser) };
   const first = !(RXA && RXA.file === f && RXA.partial);
   RXA = { file: f, st, on, base: res, times: eff.times, P: res.P / mult, cands: btCands(on), ver: (RXA ? RXA.ver : 0) + 1, cal: st.cal, D: st.n / BT_FPS, roots: btChords(st.key, k.tune, res.times), partial: true, upto };
   if (first) log(`Remix: «${trackInfo(t).title}» · battiti provvisori sui primi ${Math.round(upto)} s (${fmtBpm(rxBeat() ? rxBeat().bpm : res.bpm)} BPM): la batteria parte, finisco l'analisi mentre il brano si scarica`);
@@ -2832,7 +2891,8 @@ function rxRetrack(hintP, what, mult) {
   } else m = Math.max(0.25, Math.min(4, (r.mult || 1) * mult));
   const eff = rxMult(res.times, res.down, m);
   if (eff.times.length < 8) { toast('Troppo lento: restano pochi battiti'); return; }
-  Object.assign(r, { bpm: res.bpm * m, conf: res.conf, drift: res.drift * m, down: eff.down, hint: mult == null ? res.P : r.hint, mult: m }); delete r.prov;
+  Object.assign(r, { bpm: res.bpm * m, conf: res.conf, drift: res.drift * m, down: eff.down, hint: mult == null ? res.P : r.hint, mult: m, user: true }); delete r.prov;
+  if (!r.swingUser) r.swing = btSwing(RXA.on, eff.times).tern;
   if (res !== RXA.base) RXA.roots = btChords(RXA.st.key, r.tune || 0, res.times);
   RXA.base = res; RXA.times = eff.times; RXA.P = res.P / m; RXA.ver++;
   saveJSON(K.rhythm, RHY); drumStopAll(); rxEchoTime(); refreshRx();
@@ -2889,7 +2949,7 @@ function rxFrames(d) {
   for (let i = 0; i + 4 < d.length; i += 5) if (d[i] > 0) { RXL.tt.push(d[i]); RXL.vv.push([Math.min(4, d[i + 1]), Math.min(4, d[i + 2]), Math.min(4, d[i + 3]), Math.min(4, d[i + 4])]); }
   if (RXL.tt.length > 1800) { RXL.tt.splice(0, RXL.tt.length - 1500); RXL.vv.splice(0, RXL.vv.length - 1500); }
 }
-function rxSegReset() { if (ac) RXL.segAt = ac.currentTime + 0.3; RXL.A = null; RXL.cand = null; RXL.wideAt = 0; RXL.fail = 0; }
+function rxSegReset() { if (ac) RXL.segAt = ac.currentTime + 0.3; RXL.A = null; RXL.cand = null; RXL.wideAt = 0; RXL.fail = 0; RXL.nearSeen = false; }
 // confronto gli ultimi secondi ascoltati con l'inviluppo del file, banda per banda: lo spostamento migliore dà l'orario vero del brano
 function rxFit(A0, rate, near, half, stp, pri) {
   const cal = RXA && RXA.cal; if (!cal) return null;
@@ -2928,12 +2988,15 @@ function rxSync2(A0, rate) {           // ogni secondo e mezzo: aggiorno l'orari
   // posizione esatta: cerco solo tra i ritardi possibili per un dispositivo (da −80 a +350 ms), preferendo quello tipico,
   // così non mi aggancio a un battito di distanza; posizione stimata da Safari: ricerca larga (a passi di 10 ms), all'inizio e ogni 6 s
   // (se vicino non trovo niente per un po', provo anche lontano ma con criteri più severi: dispositivi con ritardi diversi)
-  const exact = rxExact(), exp = rxLagExp(), near = exact && RXL.fail < 4;
+  const exact = rxExact(), exp = rxLagExp(), near = exact && (RXL.fail < 4 || RXL.nearSeen);
   const lo = Math.min(exp - 0.1, -0.08), hi = Math.max(exp + 0.1, 0.35);
   const g = RXL.A == null || now - RXL.wideAt > 6 ? (near ? rxFit(A0, rate, (lo + hi) / 2, (hi - lo) / 2, 0.005, exp) : rxFit(A0, rate)) : null;
   if (g) { RXL.wideAt = now; RXL.rho = g.rho; }
   if (RXL.A == null) {                                                 // primo aggancio di questo tratto: abbastanza ascolto, un picco netto, due misure d'accordo
-    const good = g && (near ? g.n >= 380 && g.rho >= 0.25 && g.ratio >= 1.08
+    // (con la posizione esatta il ritardo del dispositivo è noto e stabile: un aggancio che se ne discosta di oltre 12 ms
+    //  lo accetto solo se è molto netto; prima si agganciava anche a somiglianze di 0,4 spostando la batteria di 20 ms)
+    if (near && g && g.rho >= 0.25) RXL.nearSeen = true;
+    const good = g && (near ? g.n >= 380 && g.rho >= 0.25 && g.ratio >= 1.08 && (RXL.lag == null || Math.abs(g.L - exp) <= 0.012 || (g.rho >= 0.5 && g.ratio >= 1.15))
       : g.n >= 550 && g.rho >= (exact ? 0.4 : 0.3) && g.ratio >= (exact ? 1.2 : 1.12));
     if (!good) {
       RXL.cand = null;
@@ -2954,7 +3017,7 @@ function rxSync2(A0, rate) {           // ogni secondo e mezzo: aggiorno l'orari
     } else if (nr) { if (g) RXL.alt = 0; RXL.rho = nr.rho; if (nr.rho >= 0.25) RXL.A += (A0 + nr.L - RXL.A) * 0.3; }
   }
   const r = { L: RXL.A - A0, rho: RXL.rho };
-  if (exact && Math.abs(r.L) <= RXLAG_MAX && RXL.rho >= 0.35) { RXL.lag = RXL.lag == null ? r.L : RXL.lag * 0.7 + r.L * 0.3; store(K.rxLag, RXL.lag.toFixed(4)); }
+  if (exact && Math.abs(r.L) <= RXLAG_MAX && RXL.rho >= 0.5) { RXL.lag = RXL.lag == null ? r.L : RXL.lag * 0.7 + r.L * 0.3; store(K.rxLag, RXL.lag.toFixed(4)); }
   const f = fileOf(curTrack() || {});
   if (RXL.logged !== f || Math.abs(r.L - RXL.loggedL) > 0.03) {
     RXL.logged = f; RXL.loggedL = r.L;
@@ -3098,7 +3161,7 @@ function drumTick() {
   const base = RXL.A != null ? RXL.A : DS.off + rxLagExp();           // orario vero del brano (ascoltato), o la stima con il ritardo tipico
   if (DS.base != null && Math.abs(base - DS.base) > 0.012) { drumCancel(0.004); DS.next = null; }
   DS.base = base;
-  const extra = RX.semi ? 0.05 : 0, nud = (b.nudge || 0) / 1000, ahead = isHidden() ? 2.5 : 0.8;   // margine: se la pagina si blocca un attimo i colpi sono già pronti
+  const extra = RX.semi ? RXN.toneLat || 0.05 : 0, nud = (b.nudge || 0) / 1000, ahead = isHidden() ? 2.5 : 0.8;   // margine: se la pagina si blocca un attimo i colpi sono già pronti
   // posizione stimata e non ancora agganciata (non si può rendere esatta): meglio il silenzio che colpi fuori tempo
   if (RXL.A == null && audio._approx && RXL.ok !== false) { DS.next = null; return; }
   let g = DS.next;
@@ -3106,8 +3169,8 @@ function drumTick() {
   const gr = rxGroove();
   for (let guard = 0; guard < 400; guard++, g++) {
     const k = g >> 2, j = g & 3; if (k + 1 >= times.length || (RXA.partial && times[k + 1] > RXA.upto - 1)) break;
-    if (base + (times[k] + j / 4 * (times[k + 1] - times[k]) + nud) / rate + extra > acNow + ahead) break;
-    rxHitsAt(k, j, gr, RX.drums.grid, b.down, times, nud, (ins, s, l, at, vel) => { const w = base + s / rate + extra; if (w >= acNow - 0.005) playHit(ins, w, l / rate, at, vel); });
+    if (base + (times[k] + rxSw(j / 4, b.swing) * (times[k + 1] - times[k]) + nud) / rate + extra > acNow + ahead) break;
+    rxHitsAt(k, j, gr, RX.drums.grid, b.down, times, nud, (ins, s, l, at, vel) => { const w = base + s / rate + extra; if (w >= acNow - 0.005) playHit(ins, w, l / rate, at, vel); }, !!b.swing);
   }
   DS.next = g;
   if (DS.srcs.length > 200) DS.srcs = DS.srcs.filter(s => s.at > acNow - 1);
@@ -3118,11 +3181,13 @@ function drumTick() {
 }
 // colpi del passo j (0-3) del battito k: cb(strumento, secondo del brano, durata in secondi del brano, punto per l'accordo, forza)
 // ritmo di un batterista o «Dal brano»: i colpi del movimento (con la loro posizione dentro il movimento); griglia: i passi accesi
-function rxHitsAt(k, j, gr, grid, down, times, nud, cb) {
-  const len = times[k + 1] - times[k], st = times[k] + j / 4 * len + nud, pos = (((k - down) % 4 + 4) % 4) * 4 + j;
+// terzinato: la metà del battito va a 2/3 (e i sedicesimi a 1/3 e 5/6), come suona un batterista in shuffle
+const rxSw = (fr, swing) => !swing ? fr : fr < 0.5 ? fr * 4 / 3 : 2 / 3 + (fr - 0.5) * 2 / 3;
+function rxHitsAt(k, j, gr, grid, down, times, nud, cb, swing) {
+  const len = times[k + 1] - times[k], st = times[k] + rxSw(j / 4, swing) * len + nud, pos = (((k - down) % 4 + 4) % 4) * 4 + j;
   if (gr && j === 0) {
     const dyn = gr.dyn ? gr.dyn[k] || 1 : 1;
-    for (const [fr, ins, vel] of gr.by[((k - down) % gr.L + gr.L) % gr.L]) cb(ins, times[k] + fr * len + nud, ins === 'bass' ? len / 2 : 0.3, st, Math.max(1, Math.round((vel || 100) * dyn)));
+    for (const [fr, ins, vel] of gr.by[((k - down) % gr.L + gr.L) % gr.L]) cb(ins, times[k] + rxSw(fr, swing && !gr.auto) * len + nud, ins === 'bass' ? len / 2 : 0.3, st, Math.max(1, Math.round((vel || 100) * dyn)));
   }
   for (const [row] of RXROWS) if (grid[row] && grid[row][pos] && (!gr || (row === 'bass' && !gr.auto))) cb(row, st, len / 2, st);
 }
@@ -3133,14 +3198,14 @@ function rxHitsAt(k, j, gr, grid, down, times, nud, cb) {
 let RXAUTO = null;
 function rxAutoGroove() {
   const b = rxBeat(); if (!RXA || !RXA.cal || !b) return null;
-  const key = RXA.ver + '|' + b.down + '|' + RXA.times.length + '|' + RXA.times[0];
+  const key = RXA.ver + '|' + b.down + '|' + RXA.times.length + '|' + RXA.times[0] + '|' + !!b.swing;
   if (RXAUTO && RXAUTO.key === key) return RXAUTO;
   const cal = RXA.cal, nf = cal.length / 4, T = RXA.times, K = T.length - 1, C = 32;
   const val = (t, q) => { const i = Math.round(t * BT_FPS); let m = 0; for (let d = -2; d <= 2; d++) { const j = i + d; if (j >= 0 && j < nf && cal[j * 4 + q] > m) m = cal[j * 4 + q]; } return Math.min(4, m); };
   const S = [0, 1, 2, 3].map(() => new Float64Array(C)), N = new Float64Array(C), en = new Float64Array(K);
   for (let k = 0; k < K; k++) {
     const len = T[k + 1] - T[k], c8 = ((k - b.down) % 8 + 8) % 8;
-    for (let j = 0; j < 4; j++) { const t = T[k] + j / 4 * len, p = c8 * 4 + j; N[p]++; for (let q = 0; q < 4; q++) { const v = val(t, q); S[q][p] += v; en[k] += v; } }
+    for (let j = 0; j < 4; j++) { const t = T[k] + rxSw(j / 4, b.swing) * len, p = c8 * 4 + j; N[p]++; for (let q = 0; q < 4; q++) { const v = val(t, q); S[q][p] += v; en[k] += v; } }
   }
   for (const s of S) for (let p = 0; p < C; p++) s[p] /= Math.max(1, N[p]);
   const mean = a => a.reduce((x, y) => x + y, 0) / a.length, sd = a => { const m = mean(a); return Math.sqrt(mean(a.map(v => (v - m) ** 2))) || 1; };
@@ -3178,7 +3243,7 @@ function rxAutoGroove() {
   const ref = sm.slice().sort((x, y) => x - y)[Math.floor(sm.length * 0.9)] || 1, dyn = new Float32Array(K + 1);
   for (let k = 0; k < K; k++) dyn[k] = Math.max(0.3, Math.min(1, Math.pow(sm[k] / ref, 0.7))); dyn[K] = K ? dyn[K - 1] : 1;
   const sig = [two, kick, snare, hatStep].join('|'), same = RXAUTO && RXAUTO.sig === sig;
-  RXAUTO = { key, sig, id: 'auto', nome: 'Dal brano', auto: true, L: L / 4, by, dyn, kick, snare, hatStep, two };
+  RXAUTO = { key, sig, swing: !!b.swing, id: 'auto', nome: 'Dal brano', auto: true, L: L / 4, by, dyn, kick, snare, hatStep, two };
   if (!same) log(`Remix: ritmo dal brano · giro di ${two ? 'due battute' : 'una battuta'} · cassa e basso su ${kick.map(p => p + 1).join(', ')} · rullante su ${snare.map(p => p + 1).join(', ') || 'nessun passo'} · charleston ${hatStep === 1 ? 'a sedicesimi' : 'a ottavi'} · volume che segue il brano`);
   return RXAUTO;
 }
@@ -3284,7 +3349,7 @@ function rxPanel() {
     swRow('Batteria', 'Trovo ogni battito del brano, anche quando il tempo cambia, e ci suono sopra una batteria che segue gli accenti e il volume della canzone. Mentre suona ascolto la musica per tenerla agganciata a quello che senti.', RX.drums.on, on => { RX.drums.on = on; log('Remix: batteria ' + (on ? 'accesa' : 'spenta')); rxSync(); refreshRx(); }));
   if (RX.drums.on) {
     const dl = CURDL && t && CURDL.file === fileOf(t) ? CURDL : null;
-    const status = ready ? h('p', { class: 'small', style: 'margin:0' }, `${fmtBpm(b.bpm)} BPM${b.drift > 1.5 ? ` (il tempo varia di ±${Math.round(b.drift)})` : ''} · accordi ${rxTopChords() || NOTE_IT[b.key]} · affidabilità ${rxConfTxt(b)}`)
+    const status = ready ? h('p', { class: 'small', style: 'margin:0' }, `${fmtBpm(b.bpm)} BPM${b.drift > 1.5 ? ` (il tempo varia di ±${Math.round(b.drift)})` : ''}${b.swing ? ' · terzinato' : ''} · accordi ${rxTopChords() || NOTE_IT[b.key]} · affidabilità ${rxConfTxt(b)}`)
       : rxAnalyzing ? h('p', { class: 'small', style: 'margin:0', 'data-rxprog': '' }, rxProgTxt())
       : h('p', { class: 'small', style: 'margin:0', 'data-rxdl': '' }, rxErr ? 'Analisi non riuscita: ' + rxErr : rxDlTxt(dl));
     wrap.append(status);
@@ -3300,6 +3365,9 @@ function rxPanel() {
         rxChip(false, '× 2', () => rxRetrack(0, '× 2', 2)), rxChip(false, '÷ 2', () => rxRetrack(0, '÷ 2', 0.5)),
         rxChip(false, '− 10 ms', () => upd(r => { r.nudge = (r.nudge || 0) - 10; }, '− 10 ms')), rxChip(false, '+ 10 ms', () => upd(r => { r.nudge = (r.nudge || 0) + 10; }, '+ 10 ms')),
         rxChip(false, 'Sposta la battuta', () => upd(r => { r.down = (r.down + 1) % 4; }, 'battuta spostata'))));
+      // dritto o terzinato (shuffle): trovato dall'analisi, si può cambiare
+      const feel = x => { b.swing = x; b.swingUser = true; delete b.prov; saveJSON(K.rhythm, RHY); drumCancel(0.004); DS.next = null; refreshRx(); log(`Remix: ritmo ${x ? 'terzinato (shuffle)' : 'dritto'} scelto a mano`); };
+      wrap.append(h('div', { class: 'eqp' }, rxChip(!b.swing, 'Dritto', () => feel(false)), rxChip(!!b.swing, 'Terzinato (shuffle)', () => feel(true))));
       wrap.append(h('p', { class: 'small mut', style: 'margin:0' }, 'Se segue un altro ritmo, prova:'), h('div', { class: 'eqp' },
         ...other.map(P => rxChip(false, `${fmtBpm(6000 / P)} BPM`, () => rxRetrack(P, `tempo scelto ${fmtBpm(6000 / P)}`))),
         rxChip(false, 'Tocca a tempo', () => {
@@ -3338,7 +3406,7 @@ function rxPanel() {
       wrap.append(grid,
         rxSlider('Batteria', 0, 1.5, 0.01, RX.drums.vol, pct, x => { RX.drums.vol = x; if (drumBus) drumBus.gain.value = x; }, rxSaveDrums),
         rxSlider('Basso', 0, 1.5, 0.01, RX.drums.bassVol, pct, x => { RX.drums.bassVol = x; if (bassBus) bassBus.gain.value = x; }, rxSaveDrums),
-        h('p', { class: 'small mut' }, 'Se la batteria va al doppio o a metà: «× 2» o «÷ 2». Se segue un altro ritmo: prova i tempi proposti o «Tocca a tempo» quattro volte sul ritmo. «Sposta la battuta» se la cassa non cade sul primo battito. Il basso segue gli accordi del brano (solo la nota principale), accordato come il brano. «Dal brano» si adatta da solo alla canzone; gli altri ritmi sono fissi.'),
+        h('p', { class: 'small mut' }, 'Se la batteria va al doppio o a metà: «× 2» o «÷ 2». Se segue un altro ritmo: prova i tempi proposti o «Tocca a tempo» quattro volte sul ritmo. «Sposta la battuta» se la cassa non cade sul primo battito. «Terzinato» per i brani in shuffle o in 12/8 (ogni battito diviso in tre): l\'analisi lo riconosce da sola, ma puoi cambiarlo. Il basso segue gli accordi del brano (solo la nota principale), accordato come il brano. «Dal brano» si adatta da solo alla canzone; gli altri ritmi sono fissi.'),
         (RX.drums.sound === 'real' || gr) ? h('p', { class: 'small mut' }, [RX.drums.sound === 'real' && RXK.kit ? `Suoni: ${RXK.kit.nome}, ${RXK.kit.autore} (${RXK.kit.licenza}).` : '', gr && RXK.grooves ? 'Ritmi: Groove MIDI Dataset, Google Magenta (CC BY 4.0).' : ''].filter(Boolean).join(' ')) : '');
     }
   }
@@ -3744,7 +3812,7 @@ function rxsSnapshot(t) {
     t, file: fileOf(t), rate: on ? RX.rate : 1, vinyl: on && RX.vinyl, semi: on ? RX.semi : 0, fx: on ? JSON.parse(JSON.stringify(RX.fx)) : {},
     eq: EQ.on ? EQ.gains.slice() : null, bpm: b ? b.bpm : 120, preset: RX.preset,
     drums: dr && {
-      vol: dr.vol, bassVol: dr.bassVol, grid: JSON.parse(JSON.stringify(dr.grid)), groove: rxGroove(), realOn: dr.sound === 'real' && !!RXK.kit, times: RXA.times.slice(), baseTimes: RXA.base.times.slice(), roots: RXA.roots ? RXA.roots.slice() : null, key: b.key, tune: b.tune || 0, down: b.down, nudge: b.nudge || 0, pattern: dr.pattern,
+      vol: dr.vol, bassVol: dr.bassVol, grid: JSON.parse(JSON.stringify(dr.grid)), groove: rxGroove(), realOn: dr.sound === 'real' && !!RXK.kit, times: RXA.times.slice(), baseTimes: RXA.base.times.slice(), roots: RXA.roots ? RXA.roots.slice() : null, key: b.key, tune: b.tune || 0, down: b.down, nudge: b.nudge || 0, pattern: dr.pattern, swing: !!b.swing,
     },
   };
 }
@@ -3801,7 +3869,7 @@ async function rxsKitAt(S) {
 function rxsHits(S) {
   const D = S.drums, out = []; if (!D) return out;
   const times = D.times, r = S.rate, nud = D.nudge / 1000, gr = D.groove;
-  for (let k = 0; k + 1 < times.length; k++) for (let j = 0; j < 4; j++) rxHitsAt(k, j, gr, D.grid, D.down, times, nud, (ins, s, l, at, vel) => out.push([ins, s / r, l / r, at, vel]));
+  for (let k = 0; k + 1 < times.length; k++) for (let j = 0; j < 4; j++) rxHitsAt(k, j, gr, D.grid, D.down, times, nud, (ins, s, l, at, vel) => out.push([ins, s / r, l / r, at, vel]), D.swing);
   return out.filter(h => h[1] >= 0).sort((a, b) => a[1] - b[1]);
 }
 // equalizzatore ed effetti: stesso schema e stessi valori di rxChain/applyEq
