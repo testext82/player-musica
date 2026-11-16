@@ -4,8 +4,9 @@ Player web personale che ascolta in streaming FLAC e altri formati audio dalla *
 
 ## Privacy
 - Accesso Dropbox di tipo *App folder* (solo la cartella dell'app), in lettura (`files.metadata.read`, `files.content.read`).
-- Facoltativo: `files.content.write`, solo per salvare preferiti, playlist e ascolti in un unico file,
-  `/_player/dati.json`, nella cartella dell'app. Il player non scrive né cancella nient'altro: la musica non viene toccata.
+- Facoltativo: `files.content.write`, solo per salvare preferiti, playlist e ascolti nel file
+  `/_player/dati.json` e, se nel Remix si usa la batteria vera, i suoni e i ritmi in `/_batteria/`, sempre nella cartella dell'app.
+  Il player non scrive né cancella nient'altro: la musica non viene toccata.
   Senza questo permesso i dati restano solo sul dispositivo.
 - Login OAuth PKCE senza server: il permesso resta nel browser del dispositivo, nel codice non c'è nessun segreto.
 - La pagina può comunicare solo con Dropbox e con il proprio sito, per `version.json` (Content-Security-Policy). Nessun font, script o servizio esterno. L'unica altra sorgente audio ammessa è `blob:`, cioè i brani precaricati in memoria.
@@ -29,6 +30,8 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
+
+v1.33: la nota sul salvataggio in Impostazioni dice anche della cartella `_batteria` (prima diceva «un solo file»).
 
 v1.32: **batteria vera e ritmi di batteristi** nel Remix.
 - «Suoni: Batteria vera»: MuldjordKit (Tama Superstar, CC BY 4.0), 19 colpi con 2–3 intensità (mix stereo dei microfoni fatto per Basalto).
