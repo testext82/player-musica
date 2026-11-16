@@ -326,13 +326,13 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.33';
+const VERSION = '1.34';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
 const CONTENT = 'https://content.dropboxapi.com/2/';
 const SCOPES = 'files.metadata.read files.content.read';
-const WRITE_SCOPE = 'files.content.write';      // solo per /_player/dati.json (preferiti e playlist) e /_batteria/ (Remix)
+const WRITE_SCOPE = 'files.content.write';      // solo per /_player/dati.json (preferiti e playlist), /_batteria/ e /Remix/ (Remix)
 const REDIRECT_URI = location.origin + location.pathname;
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
 const K = { updSkip: 'mx_upd_skip', user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
@@ -2305,7 +2305,7 @@ function setRgMode(mode) { RG.mode = mode; saveJSON(K.rg, RG); applyGain(true); 
 
 /* ======================= REMIX: velocità, tono, effetti, batteria a tempo =======================
    Tutto avviene nel motore audio mentre il brano suona: il file su Dropbox non cambia mai.
-   Per ora le impostazioni valgono finché l'app resta aperta (il salvataggio dei remix verrà dopo). */
+   Le impostazioni valgono finché l'app resta aperta; «Salva su Dropbox» crea un nuovo FLAC nella cartella Remix. */
 const RX = {
   on: false, rate: 1, vinyl: false, semi: 0, preset: 'none',
   fx: { rev: { on: false, size: 0.5, mix: 0.35 }, echo: { on: false, div: '1/8', fb: 0.35, mix: 0.3 }, filt: { on: false, type: 'lp', freq: 0.35 },
@@ -2376,22 +2376,21 @@ function rxChain() {
   }
   cur.connect(fxMaster);
 }
-function rxFilterParams() {
-  const f = RXN.filt; if (!f) return; const p = RX.fx.filt;
-  if (p.type === 'lp') { f.type = 'lowpass'; f.frequency.value = 150 * Math.pow(60, p.freq); f.Q.value = 1.2; }
-  else if (p.type === 'hp') { f.type = 'highpass'; f.frequency.value = 150 * Math.pow(20, p.freq); f.Q.value = 0.9; }
-  else { f.type = 'bandpass'; f.frequency.value = 500 * Math.pow(6, p.freq); f.Q.value = 2.2; }
+function rxFiltCfg(p) {
+  return p.type === 'lp' ? { type: 'lowpass', freq: 150 * Math.pow(60, p.freq), Q: 1.2 } : p.type === 'hp' ? { type: 'highpass', freq: 150 * Math.pow(20, p.freq), Q: 0.9 } : { type: 'bandpass', freq: 500 * Math.pow(6, p.freq), Q: 2.2 };
 }
-function rxDistParams() {
-  if (!RXN.ws) return; const k = RX.fx.dist.amt * 60, n = 2048, c = new Float32Array(n);
+function rxFilterParams() { const f = RXN.filt; if (!f) return; const c = rxFiltCfg(RX.fx.filt); f.type = c.type; f.frequency.value = c.freq; f.Q.value = c.Q; }
+function rxDistCfg(amt) {
+  const k = amt * 60, n = 2048, c = new Float32Array(n);
   for (let i = 0; i < n; i++) { const x = i * 2 / n - 1; c[i] = (1 + k) * x / (1 + k * Math.abs(x)); }
-  RXN.ws.curve = c; RXN.distOut.gain.value = 1 / (1 + RX.fx.dist.amt * 1.5);
+  return { curve: c, out: 1 / (1 + amt * 1.5) };
 }
+function rxDistParams() { if (!RXN.ws) return; const d = rxDistCfg(RX.fx.dist.amt); RXN.ws.curve = d.curve; RXN.distOut.gain.value = d.out; }
 const ECHODIV = { '1/4': 1, '1/8': 0.5, '3/16': 0.75, '1/16': 0.25 };
+const rxEchoSec = (bpm, div, r) => Math.min(3.9, 60 / bpm * ECHODIV[div] / r);
 function rxEchoTime() {
   if (!RXN.echoDl) return;
-  const bpm = rxBeat() ? rxBeat().bpm : 120, r = RX.on ? RX.rate : 1;
-  RXN.echoDl.delayTime.setTargetAtTime(Math.min(3.9, 60 / bpm * ECHODIV[RX.fx.echo.div] / r), ac.currentTime, 0.05);
+  RXN.echoDl.delayTime.setTargetAtTime(rxEchoSec(rxBeat() ? rxBeat().bpm : 120, RX.fx.echo.div, RX.on ? RX.rate : 1), ac.currentTime, 0.05);
 }
 function reverbIR(size) {
   const sr = ac.sampleRate, len = Math.floor(sr * (0.4 + size * 4.2)), b = ac.createBuffer(2, len, sr), decay = 1.6 + size * 2.5;
@@ -2888,13 +2887,13 @@ function rxSync2(A0, rate) {           // ogni secondo e mezzo: aggiorno l'orari
 
 /* --- batteria: suoni creati qui (niente campioni da internet) --- */
 let KIT = null;
-async function rxKit() {
-  if (KIT) return KIT;
-  const sr = ac.sampleRate, OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+async function rxKit() { if (!KIT) KIT = await rxKitMake(ac.sampleRate); return KIT; }
+async function rxKitMake(sr) {
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   const render = async (dur, fn) => { const oc = new OAC(1, Math.ceil(dur * sr), sr); fn(oc); return oc.startRendering(); };
   const noise = (oc, dur) => { const b = oc.createBuffer(1, Math.ceil(dur * sr), sr), d = b.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; const s = oc.createBufferSource(); s.buffer = b; return s; };
   const env = (oc, g, a, dur) => { g.gain.setValueAtTime(a, 0); g.gain.exponentialRampToValueAtTime(0.0008, dur); };
-  KIT = {
+  return {
     kick: await render(0.5, oc => { const o = oc.createOscillator(), g = oc.createGain(); o.frequency.setValueAtTime(155, 0); o.frequency.exponentialRampToValueAtTime(45, 0.12); env(oc, g, 1, 0.45); o.connect(g); g.connect(oc.destination); o.start(0);
       const c = noise(oc, 0.01), cg = oc.createGain(); env(oc, cg, 0.3, 0.008); c.connect(cg); cg.connect(oc.destination); c.start(0); }),
     snare: await render(0.3, oc => { const n = noise(oc, 0.3), f = oc.createBiquadFilter(), g = oc.createGain(); f.type = 'bandpass'; f.frequency.value = 1900; f.Q.value = 0.7; env(oc, g, 0.8, 0.22); n.connect(f); f.connect(g); g.connect(oc.destination); n.start(0);
@@ -2906,7 +2905,6 @@ async function rxKit() {
       n.connect(f); f.connect(g); g.connect(oc.destination); n.start(0); }),
     tom: await render(0.45, oc => { const o = oc.createOscillator(), g = oc.createGain(); o.frequency.setValueAtTime(130, 0); o.frequency.exponentialRampToValueAtTime(78, 0.3); env(oc, g, 0.9, 0.4); o.connect(g); g.connect(oc.destination); o.start(0); }),
   };
-  return KIT;
 }
 /* --- suoni veri e ritmi di batteristi ---
    Stanno nella cartella _batteria di Dropbox (la libreria la ignora: non ci sono file audio). Se mancano, li prendo dalla copia
@@ -2973,22 +2971,28 @@ function rxTopChords() {
   return n.map((c, p) => [c, p]).filter(([c]) => c >= RXA.roots.length * 0.08).sort((a, b) => b[0] - a[0]).slice(0, 4).map(([, p]) => NOTE_IT[p]).join(', ');
 }
 const RXVEL = { kick: 108, snare: 104, hat: 78, ohat: 84, tom: 96, ftom: 96, crash: 100, ride: 80 };
-function playHit(row, when, len, at, vel) {
+// T: motore (ctx), uscite di batteria e basso, suoni (veri o sintetici), accordi; «when» può essere negativo solo nel salvataggio
+function rxHit(T, row, when, len, at, vel) {
+  const ctx = T.ctx;
   if (row === 'bass') {
-    const b = rxBeat(); if (!b) return;
-    const pc = rxRootAt(at), midi = 36 + (pc != null ? pc : b.key) + (b.tune || 0) / 100, f = 440 * Math.pow(2, (midi - 69) / 12), o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
+    if (when < 0 || T.key == null) return;
+    const pc = T.rootAt(at), midi = 36 + (pc != null ? pc : T.key) + (T.tune || 0) / 100, f = 440 * Math.pow(2, (midi - 69) / 12), o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
     o.type = 'sawtooth'; o.frequency.value = f; lp.type = 'lowpass'; lp.frequency.value = 420; g.gain.setValueAtTime(0.0001, when); g.gain.exponentialRampToValueAtTime(0.7, when + 0.01);
     g.gain.exponentialRampToValueAtTime(0.0008, when + len);
-    o.connect(lp); lp.connect(g); g.connect(bassBus); o.start(when); o.stop(when + len + 0.05); DS.srcs.push({ n: o, at: when }); return;
+    o.connect(lp); lp.connect(g); g.connect(T.bass); o.start(when); o.stop(when + len + 0.05); if (T.push) T.push({ n: o, at: when }); return;
   }
-  const real = RX.drums.sound === 'real' && RXK.buf && RXK.ctx === ac ? RXK.buf[row] : null;
-  const s = ac.createBufferSource();
+  const real = T.real ? T.real[row] : null, s = ctx.createBufferSource();
   if (real) {
-    const v = vel || RXVEL[row] || 100, g = ac.createGain();
+    const v = vel || RXVEL[row] || 100, g = ctx.createGain();
     s.buffer = real[Math.min(real.length - 1, Math.floor(v / 128 * real.length))]; g.gain.value = 0.35 + 0.65 * v / 127;
-    s.connect(g); g.connect(drumBus);
-  } else { const sb = KIT[row] || KIT[{ ftom: 'tom', ride: 'hat', crash: 'ohat' }[row]]; if (!sb) return; s.buffer = sb; s.connect(drumBus); }
-  s.start(when); DS.srcs.push({ n: s, at: when });
+    s.connect(g); g.connect(T.drum);
+  } else { const sb = T.kit[row] || T.kit[{ ftom: 'tom', ride: 'hat', crash: 'ohat' }[row]]; if (!sb) return; s.buffer = sb; s.connect(T.drum); }
+  if (when < 0) { if (-when >= s.buffer.duration) return; s.start(0, -when); } else s.start(when);
+  if (T.push) T.push({ n: s, at: when });
+}
+function playHit(row, when, len, at, vel) {
+  const b = rxBeat();
+  rxHit({ ctx: ac, drum: drumBus, bass: bassBus, real: RX.drums.sound === 'real' && RXK.buf && RXK.ctx === ac ? RXK.buf : null, kit: KIT, key: b ? b.key : null, tune: b ? b.tune : 0, rootAt: rxRootAt, push: x => DS.srcs.push(x) }, row, when, len, at, vel);
 }
 const rxBeatAt = (times, s) => { let lo = 0, hi = times.length; while (lo < hi) { const m = (lo + hi) >> 1; if (times[m] <= s) lo = m + 1; else hi = m; } return lo - 1; };   // ultimo battito ≤ s
 function drumTick() {
@@ -3089,7 +3093,7 @@ function rxFxRow(key, title, desc, body) {
     f.on ? h('div', { class: 'rxbody' }, ...body()) : h('p', { class: 'small mut' }, desc));
 }
 function rxPanel() {
-  const fx = RX.fx, wrap = h('div', { class: 'eq' }, swRow('Remix', 'Velocità, tono, effetti e batteria a tempo mentre il brano suona. Il file originale non cambia. Per ora le impostazioni restano finché l\'app è aperta.', RX.on,
+  const fx = RX.fx, wrap = h('div', { class: 'eq' }, swRow('Remix', 'Velocità, tono, effetti e batteria a tempo mentre il brano suona. Il file originale non cambia. Le impostazioni restano finché l\'app è aperta; in fondo puoi salvare il remix su Dropbox.', RX.on,
     on => { RX.on = on; log('Remix ' + (on ? 'attivato' : 'disattivato')); rxSync(); refreshRx(); }));
   if (!RX.on) return wrap;
   const custom = () => { RX.preset = 'custom'; };
@@ -3179,7 +3183,731 @@ function rxPanel() {
         (RX.drums.sound === 'real' || gr) ? h('p', { class: 'small mut' }, [RX.drums.sound === 'real' && RXK.kit ? `Suoni: ${RXK.kit.nome}, ${RXK.kit.autore} (${RXK.kit.licenza}).` : '', gr && RXK.grooves ? 'Ritmi: Groove MIDI Dataset, Google Magenta (CC BY 4.0).' : ''].filter(Boolean).join(' ')) : '');
     }
   }
+  wrap.append(h('div', { class: 'rxsec' }, 'Salva il remix'), rxsBox());
   return wrap;
+}
+
+/* --- salvataggio del remix: elaborazione del suono (in JavaScript, a pezzi, poca memoria) --- */
+// contenitore di campioni per più canali, con indici assoluti: si aggiunge in fondo e si scarta dall'inizio
+function rxsFifo(nch) {
+  const F = { base: 0, n: 0, cap: 0, d: [] };
+  F.need = add => {
+    if (F.d.length && F.n + add <= F.cap) return;
+    const cap = Math.max(65536, (F.n + add) * 2);
+    F.d = F.d.length ? F.d.map(a => { const b = new Float32Array(cap); b.set(a.subarray(0, F.n)); return b; }) : Array.from({ length: nch }, () => new Float32Array(cap));
+    F.cap = cap;
+  };
+  F.push = chans => { const k = chans[0].length; F.need(k); for (let c = 0; c < nch; c++) F.d[c].set(chans[c], F.n); F.n += k; };
+  F.zeros = k => { F.need(k); for (let c = 0; c < nch; c++) F.d[c].fill(0, F.n, F.n + k); F.n += k; };
+  F.end = () => F.base + F.n;
+  F.drop = abs => {                       // scarta tutto ciò che sta prima di «abs»
+    const k = Math.max(0, Math.min(F.n, abs - F.base)); if (!k) return;
+    for (let c = 0; c < nch; c++) F.d[c].copyWithin(0, k, F.n);
+    F.n -= k; F.base += k;
+  };
+  F.take = (a, b) => F.d.map(x => x.slice(a - F.base, b - F.base));       // copia [a, b)
+  return F;
+}
+
+/* cambio di velocità senza cambiare la tonalità: vocoder di fase con aggancio delle fasi ai picchi (Laroche-Dolson)
+   e fasi riallineate sui colpi forti, così l'attacco di batteria e chitarre resta netto.
+   alpha > 1 allunga (più lento), alpha < 1 accorcia. Il campione n in uscita corrisponde al campione n / alpha in entrata. */
+var RXS_TR = 0.25;
+function rxsStretcher(nch, N, alpha) {
+  const H = N >> 2, B = N >> 1, win = new Float64Array(N), om = new Float64Array(B + 1);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+  for (let k = 0; k <= B; k++) om[k] = 2 * Math.PI * k / N;
+  const NORM = 1 / (1.5 * N);                            // Hann² con sovrapposizione di 3/4 somma a 1,5; 1/N dell'antitrasformata
+  const IN = rxsFifo(nch), OUT = rxsFifo(nch), re = new Float64Array(N), im = new Float64Array(N);
+  const mag = [], ana = [], prevAna = [], prevMag = [], syn = [], peaks = new Int32Array(B + 1);
+  for (let c = 0; c < nch; c++) { mag.push(new Float64Array(B + 1)); ana.push(new Float64Array(B + 1)); prevAna.push(new Float64Array(B + 1)); prevMag.push(new Float64Array(B + 1)); syn.push(new Float64Array(B + 1)); }
+  const lm = new Float64Array(B + 1), hist = [];
+  let m = 0, prevA0 = 0, ended = false, emitted = 0, sinceReset = 99, resets = 0, frames = 0;
+  OUT.zeros(0);
+  function frame() {
+    const ca = m * H / alpha, a0 = Math.round(ca) - B;
+    for (let i = 0; i < N; i++) {
+      const j = a0 + i - IN.base, ok = j >= 0 && j < IN.n;
+      re[i] = ok ? IN.d[0][j] * win[i] : 0; im[i] = ok && nch > 1 ? IN.d[1][j] * win[i] : 0;
+    }
+    btFft(re, im);
+    // spettri dei due canali dal trasformato complesso unico
+    for (let k = 0; k <= B; k++) {
+      const k2 = (N - k) % N;
+      let ar, ai, br = 0, bi = 0;
+      if (nch > 1) { ar = (re[k] + re[k2]) / 2; ai = (im[k] - im[k2]) / 2; br = (im[k] + im[k2]) / 2; bi = (re[k2] - re[k]) / 2; }
+      else { ar = re[k]; ai = im[k]; }
+      mag[0][k] = Math.sqrt(ar * ar + ai * ai); ana[0][k] = Math.atan2(ai, ar);
+      if (nch > 1) { mag[1][k] = Math.sqrt(br * br + bi * bi); ana[1][k] = Math.atan2(bi, br); }
+    }
+    // colpo forte? (lo spettro cresce di colpo molto più del solito)
+    let up = 0, tot = 0;
+    for (let k = 1; k < B; k++) { let s = 0; for (let c = 0; c < nch; c++) s += mag[c][k]; if (m) up += Math.max(0, s - lm[k]); tot += s; lm[k] = s; }
+    const flux = tot > 0 ? up / tot : 0;
+    const med = hist.length >= 8 ? hist.slice().sort((x, y) => x - y)[hist.length >> 1] : Infinity;
+    const reset = m === 0 || (sinceReset >= 4 && flux > RXS_TR && flux > 2.5 * med);
+    hist.push(flux); if (hist.length > 24) hist.shift();
+    if (reset) { sinceReset = 0; if (m) resets++; } else sinceReset++;
+    const hop = a0 - prevA0;
+    for (let c = 0; c < nch; c++) {
+      const M = mag[c], A = ana[c], P = prevAna[c], S = syn[c], PM = prevMag[c];
+      if (m === 0 || hop <= 0) S.set(A);
+      else {
+        let np = 0;
+        for (let k = 2; k < B - 1; k++) if (M[k] > M[k - 1] && M[k] >= M[k + 1] && M[k] > M[k - 2] && M[k] >= M[k + 2]) peaks[np++] = k;
+        const adv = k => { let d = A[k] - P[k] - om[k] * hop; d -= 2 * Math.PI * Math.round(d / (2 * Math.PI)); return S[k] + (om[k] + d / hop) * H; };
+        if (!np) for (let k = 0; k <= B; k++) S[k] = adv(k);
+        else {
+          let lo = 0;
+          for (let q = 0; q < np; q++) {
+            const pk = peaks[q], hi = q + 1 < np ? (pk + peaks[q + 1]) >> 1 : B, s = adv(pk), d = s - A[pk];
+            for (let k = lo; k <= hi; k++) S[k] = k === pk ? s : A[k] + d;
+            lo = hi + 1;
+          }
+        }
+        // sul colpo riallineo solo le frequenze che crescono di colpo (+6 dB): le note che continuano non si toccano
+        if (reset) for (let k = 1; k < B; k++) if (M[k] > 2 * PM[k]) S[k] = A[k];
+        S[0] = A[0]; S[B] = A[B];
+      }
+      P.set(A); PM.set(M);
+    }
+    prevA0 = a0;
+    // antitrasformata dei due canali insieme: Z = Y0 + i·Y1
+    for (let k = 0; k <= B; k++) {
+      const a = mag[0][k] * Math.cos(syn[0][k]), b = mag[0][k] * Math.sin(syn[0][k]);
+      const cc = nch > 1 ? mag[1][k] * Math.cos(syn[1][k]) : 0, d = nch > 1 ? mag[1][k] * Math.sin(syn[1][k]) : 0;
+      // coniugo per usare la trasformata diretta come inversa
+      re[k] = a - d; im[k] = -(b + cc);
+      if (k && k < B) { re[N - k] = a + d; im[N - k] = -(cc - b); }
+    }
+    btFft(re, im);
+    const o0 = m * H - B;
+    OUT.need(0);
+    const need = o0 + N - OUT.end(); if (need > 0) OUT.zeros(need);
+    for (let i = 0; i < N; i++) {
+      const j = o0 + i - OUT.base; if (j < 0) continue;
+      const w = win[i] * NORM;
+      OUT.d[0][j] += re[i] * w; if (nch > 1) OUT.d[1][j] -= im[i] * w;
+    }
+    m++; frames++;
+    IN.drop(Math.round(m * H / alpha) - B - 4);
+  }
+  const ready = () => { const a0 = Math.round(m * H / alpha) - B; return ended || a0 + N <= IN.end(); };
+  function run() {
+    while (ready() && (!ended || m * H - B < endOut)) frame();
+    const upto = Math.min(m * H - B, ended ? endOut : Infinity);     // prima di qui nessun blocco aggiunge più niente
+    if (upto <= emitted) return null;
+    const out = OUT.take(Math.max(emitted, OUT.base), upto); OUT.drop(upto); emitted = upto;
+    return out;
+  }
+  let endOut = Infinity;
+  return {
+    push(chans) { IN.push(chans); return run(); },
+    end(totalOut) { ended = true; endOut = totalOut; return run(); },
+    info: () => ({ frames, resets }),
+  };
+}
+
+// ricampionamento di qualità (sinc con finestra di Kaiser): campione n in uscita = posizione n·rho in entrata
+function rxsBesselI0(x) { let s = 1, t = 1; for (let k = 1; k < 40; k++) { t *= (x / (2 * k)) ** 2; s += t; if (t < 1e-12 * s) break; } return s; }
+function rxsResampler(nch, rho) {
+  const fc = Math.min(1, 1 / rho) * (rho > 1 ? 0.92 : 0.97), Z = 24, W = Math.ceil(Z / fc), PH = 512, beta = 8.6, i0b = rxsBesselI0(beta);
+  const T = new Float32Array((2 * W + 1) * (PH + 1));         // tabella: h(d) per d = j + p/PH, j da -W a W
+  for (let j = -W; j <= W; j++) for (let p = 0; p <= PH; p++) {
+    const d = j + p / PH, x = d / W, w = Math.abs(x) >= 1 ? 0 : rxsBesselI0(beta * Math.sqrt(1 - x * x)) / i0b;
+    T[(j + W) * (PH + 1) + p] = w * fc * (d === 0 ? 1 : Math.sin(Math.PI * fc * d) / (Math.PI * fc * d));
+  }
+  const IN = rxsFifo(nch); let n = 0, ended = false, endOut = Infinity;
+  function run() {
+    const avail = IN.end();
+    let nEnd = ended ? endOut : Math.max(n, Math.floor((avail - W - 1) / rho));
+    while (!ended && nEnd > n && Math.floor(nEnd * rho) + W >= avail) nEnd--;      // serve il campione floor(x) + W
+    const len = nEnd - n; if (len <= 0) return null;
+    const outs = []; for (let c = 0; c < nch; c++) outs.push(new Float32Array(len));
+    for (let q = 0; q < len; q++) {
+      const x = (n + q) * rho, i = Math.floor(x), pf = (x - i) * PH, p = Math.floor(pf), t = pf - p;
+      const jlo = Math.max(-W, i - (IN.end() - 1)), jhi = Math.min(W - 1, i - IN.base);
+      for (let c = 0; c < nch; c++) {
+        const D = IN.d[c]; let s = 0;
+        for (let j = jlo; j <= jhi; j++) {                // campione k = i - j, distanza d = x - k = j + frazione
+          const b = (j + W) * (PH + 1) + p;
+          s += D[i - j - IN.base] * (T[b] + (T[b + 1] - T[b]) * t);
+        }
+        outs[c][q] = s;
+      }
+    }
+    n = nEnd; IN.drop(Math.floor(n * rho) - W - 2);
+    return outs;
+  }
+  return { push(chans) { IN.push(chans); return run(); }, end(totalOut) { ended = true; endOut = totalOut; return run(); } };
+}
+
+/* limitatore: niente distorsione se batteria ed effetti superano il massimo (−0,1 dB). Guarda avanti di 5 ms e abbassa il volume
+   solo dove servirebbe (poi lo riporta su in 150 ms). Ritarda il suono di L campioni. */
+function rxsLimiter(nch, sr, ceil) {
+  const L = Math.max(8, Math.round(sr * 0.005)), rel = 1 - Math.exp(-1 / (0.15 * sr));
+  const need = new Float64Array(2 * L), box = new Float64Array(L), delay = Array.from({ length: nch }, () => new Float32Array(L));
+  let ni = 0, bi = 0, bsum = L, g = 1, di = 0, minRed = 1, count = 0;
+  need.fill(1); box.fill(1);
+  // minimo su finestra mobile (2L) con deque
+  const dq = new Int32Array(4 * L + 8), dv = new Float64Array(4 * L + 8); let dh = 0, dt = 0, t = 0;
+  function process(chans) {
+    const n = chans[0].length, out = chans.map(() => new Float32Array(n));
+    for (let i = 0; i < n; i++) {
+      let pk = 0; for (let c = 0; c < nch; c++) { const a = Math.abs(chans[c][i]); if (a > pk) pk = a; }
+      const req = pk > ceil ? ceil / pk : 1;
+      while (dt > dh && dv[(dt - 1) % dq.length] >= req) dt--;
+      dq[dt % dq.length] = t; dv[dt % dq.length] = req; dt++;
+      while (dq[dh % dq.length] <= t - 2 * L) dh++;
+      const h = dv[dh % dq.length];
+      bsum += h - box[bi]; box[bi] = h; bi = (bi + 1) % L;
+      const g2 = Math.min(1, bsum / L);
+      g = g2 < g ? g2 : g + (g2 - g) * rel;
+      if (g < minRed) minRed = g; if (g < 0.891) count++;
+      for (let c = 0; c < nch; c++) { out[c][i] = delay[c][di] * g; delay[c][di] = chans[c][i]; }
+      di = (di + 1) % L; t++;
+    }
+    return out;
+  }
+  return { L, process, info: () => ({ minGain: minRed, limited: count }) };     // limited: campioni abbassati di oltre 1 dB
+}
+
+/* --- codificatore FLAC (senza perdita): predizione lineare (LPC) o fissa, stereo con canale di differenza, codici di Rice ---
+   Scrive frame da 4096 campioni nel formato «subset» standard: si legge con qualunque lettore FLAC, anche Basalto stesso. */
+const FLAC_CRC16 = (() => { const t = new Uint16Array(256); for (let i = 0; i < 256; i++) { let c = i << 8; for (let k = 0; k < 8; k++) c = c & 0x8000 ? ((c << 1) ^ 0x8005) & 0xffff : (c << 1) & 0xffff; t[i] = c; } return t; })();
+function flacBits(cap) {                         // scrittura bit per bit
+  const W = { buf: new Uint8Array(cap || 65536), pos: 0, acc: 0, n: 0 };
+  const grow = () => { const b = new Uint8Array(W.buf.length * 2); b.set(W.buf); W.buf = b; };
+  W.put = (v, bits) => {                         // bits ≤ 24, 0 ≤ v < 2^bits
+    let acc = (W.acc << bits) | v, n = W.n + bits;
+    if (W.pos + 4 >= W.buf.length) grow();
+    while (n >= 8) { n -= 8; W.buf[W.pos++] = (acc >>> n) & 255; }
+    W.acc = acc & ((1 << n) - 1); W.n = n;
+  };
+  W.bits = (v, bits) => { if (bits > 24) { W.put(Math.floor(v / 16777216), bits - 24); W.put(v % 16777216, 24); } else W.put(v, bits); };
+  W.sbits = (v, bits) => W.bits(v < 0 ? v + Math.pow(2, bits) : v, bits);
+  W.zeros = q => { while (q > 24) { W.put(0, 24); q -= 24; } if (q > 0) W.put(0, q); };
+  W.align = () => { if (W.n) W.put(0, 8 - W.n); };
+  W.bytes = () => W.buf.subarray(0, W.pos);
+  return W;
+}
+function flacUtf8(n) {                           // numero del frame (codifica «UTF-8» estesa)
+  if (n < 0x80) return [n];
+  const out = []; let len = n < 0x800 ? 2 : n < 0x10000 ? 3 : n < 0x200000 ? 4 : n < 0x4000000 ? 5 : 6;
+  for (let i = len - 1; i > 0; i--) { out.unshift(0x80 | (n & 0x3f)); n = Math.floor(n / 64); }
+  out.unshift(((0xff00 >> len) & 0xff) | n); return out;
+}
+const FLAC_SR = { 88200: 1, 176400: 2, 192000: 3, 8000: 4, 16000: 5, 22050: 6, 24000: 7, 32000: 8, 44100: 9, 48000: 10, 96000: 11 };
+
+// residuo con predittore fisso di ordine o (0-4)
+function flacFixedRes(x, n, o, r) {
+  for (let i = o; i < n; i++) {
+    const a = x[i];
+    r[i - o] = o === 0 ? a : o === 1 ? a - x[i - 1] : o === 2 ? a - 2 * x[i - 1] + x[i - 2] : o === 3 ? a - 3 * x[i - 1] + 3 * x[i - 2] - x[i - 3] : a - 4 * x[i - 1] + 6 * x[i - 2] - 4 * x[i - 3] + x[i - 4];
+  }
+  return n - o;
+}
+function flacFixedBest(x, n) {                  // ordine con meno errore (somma dei valori assoluti)
+  const s = [0, 0, 0, 0, 0];
+  for (let i = 4; i < n; i++) {
+    const a = x[i], b = x[i - 1], c = x[i - 2], d = x[i - 3], e = x[i - 4];
+    s[0] += Math.abs(a); s[1] += Math.abs(a - b); s[2] += Math.abs(a - 2 * b + c); s[3] += Math.abs(a - 3 * b + 3 * c - d); s[4] += Math.abs(a - 4 * b + 6 * c - 4 * d + e);
+  }
+  let o = 0; for (let k = 1; k < 5; k++) if (s[k] < s[o]) o = k;
+  return { o, err: s[o] };
+}
+// parametri di Rice: per ogni divisione del blocco il k migliore, e la divisione migliore
+function flacRicePlan(r, cnt, n, order, maxPo) {
+  const u = new Float64Array(cnt); for (let i = 0; i < cnt; i++) { const v = r[i]; u[i] = v >= 0 ? 2 * v : -2 * v - 1; }
+  let top = 0; while (top < maxPo && n % (2 << top) === 0 && (n >> (top + 1)) > order) top++;
+  // somme per le divisioni più fini, poi unite a due a due
+  let sums = new Float64Array(1 << top), plen = n >> top, idx = 0;
+  for (let p = 0; p < (1 << top); p++) { const len = p === 0 ? plen - order : plen; let s = 0; for (let i = 0; i < len; i++) s += u[idx + i]; sums[p] = s; idx += len; }
+  let best = null;
+  for (let po = top; po >= 0; po--) {
+    const parts = 1 << po, pl = n >> po, ks = []; let bits = parts * 5;
+    for (let p = 0; p < parts; p++) {
+      const len = p === 0 ? pl - order : pl, sum = sums[p];
+      const k0 = Math.max(0, Math.floor(Math.log2(sum / Math.max(1, len) + 1)) - 1);
+      let k = 0, kb = Infinity;
+      for (let kk = Math.max(0, k0 - 1); kk <= Math.min(30, k0 + 2); kk++) { const b = len * (kk + 1) + Math.floor(sum / Math.pow(2, kk)); if (b < kb) { kb = b; k = kk; } }
+      ks.push(k); bits += kb;
+    }
+    if (!best || bits < best.bits) best = { po, ks, bits };
+    if (po) { const s2 = new Float64Array(parts >> 1); for (let p = 0; p < parts >> 1; p++) s2[p] = sums[2 * p] + sums[2 * p + 1]; sums = s2; }
+  }
+  best.u = u; return best;
+}
+function flacWriteRes(W, plan, n, order) {
+  const big = plan.ks.some(k => k > 14);
+  W.put(big ? 1 : 0, 2); W.put(plan.po, 4);
+  const parts = 1 << plan.po, plen = n >> plan.po, u = plan.u; let idx = 0;
+  for (let p = 0; p < parts; p++) {
+    const len = p === 0 ? plen - order : plen, k = plan.ks[p], d = Math.pow(2, k);
+    W.put(k, big ? 5 : 4);
+    if (k <= 22) {
+      for (let i = 0; i < len; i++) { const v = u[idx + i], q = Math.floor(v / d); if (q) W.zeros(q); W.put(d + (v - q * d), k + 1); }   // 1 seguito dai k bit bassi
+    } else for (let i = 0; i < len; i++) { const v = u[idx + i], q = Math.floor(v / d); if (q) W.zeros(q); W.put(1, 1); W.bits(v - q * d, k); }
+    idx += len;
+  }
+}
+// LPC: autocorrelazione con finestra di Tukey, Levinson-Durbin, coefficienti quantizzati a 15 bit
+function flacLpc(x, n, maxOrd, win) {
+  const xw = new Float64Array(n); for (let i = 0; i < n; i++) xw[i] = x[i] * win[i];
+  const R = new Float64Array(maxOrd + 1);
+  for (let l = 0; l <= maxOrd; l++) { let s = 0; for (let i = l; i < n; i++) s += xw[i] * xw[i - l]; R[l] = s; }
+  if (R[0] <= 0) return null;
+  R[0] *= 1 + 1e-9;
+  const a = new Float64Array(maxOrd + 1), tmp = new Float64Array(maxOrd + 1), res = [];
+  let err = R[0];
+  for (let i = 1; i <= maxOrd; i++) {
+    let acc = R[i]; for (let j = 1; j < i; j++) acc -= a[j] * R[i - j];
+    const k = acc / err; tmp.set(a);
+    a[i] = k; for (let j = 1; j < i; j++) a[j] = tmp[j] - k * tmp[i - j];
+    err *= 1 - k * k; if (err <= 0) break;
+    res.push({ ord: i, coef: a.slice(1, i + 1), err });
+  }
+  return res;
+}
+function flacQuant(coef, prec) {
+  let cmax = 0; for (const c of coef) cmax = Math.max(cmax, Math.abs(c));
+  if (!(cmax > 0)) return null;
+  let shift = prec - 1 - (Math.floor(Math.log2(cmax)) + 1); shift = Math.max(0, Math.min(15, shift));
+  const lim = 1 << (prec - 1), q = new Int32Array(coef.length); let e = 0;
+  for (let i = 0; i < coef.length; i++) { e += coef[i] * Math.pow(2, shift); let v = Math.round(e); v = Math.max(-lim, Math.min(lim - 1, v)); q[i] = v; e -= v; }
+  return { q, shift };
+}
+function flacLpcRes(x, n, q, shift, r) {
+  const p = q.length, d = Math.pow(2, shift);
+  for (let i = p; i < n; i++) { let s = 0; for (let j = 0; j < p; j++) s += q[j] * x[i - 1 - j]; r[i - p] = x[i] - Math.floor(s / d); }
+}
+function flacEncoder(o) {
+  const { sr, nch, bps, total } = o, BS = 4096, maxPo = 8, PREC = 15, maxOrd = sr <= 48000 ? 12 : 16;
+  const win = new Float64Array(BS);       // Tukey(0,5)
+  for (let i = 0; i < BS; i++) { const a = 0.25 * BS; win[i] = i < a ? 0.5 - 0.5 * Math.cos(Math.PI * i / a) : i >= BS - a ? 0.5 - 0.5 * Math.cos(Math.PI * (BS - 1 - i) / a) : 1; }
+  const res = new Float64Array(BS), res2 = new Float64Array(BS);
+  let frameNo = 0, written = 0, fmin = 0, fmax = 0;
+  function header(tags) {
+    const blocks = [];
+    const si = flacBits(64);
+    si.put(BS, 16); si.put(BS, 16); si.put(fmin, 24); si.put(fmax, 24);
+    si.put(Math.floor(sr / 16), 16); si.put(sr % 16, 4); si.put(nch - 1, 3); si.put(bps - 1, 5);
+    si.bits(Math.floor(total / 4294967296), 4); si.bits(total % 4294967296, 32);
+    for (let i = 0; i < 16; i++) si.put(0, 8);
+    blocks.push([0, si.bytes()]);
+    const enc = new TextEncoder(), vc = [], le = v => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
+    const T = tags || o.tags || [], vend = enc.encode(o.vendor || 'Basalto'); vc.push(...le(vend.length), ...vend, ...le(T.length));
+    for (const [k, v] of T) { const e = enc.encode(k + '=' + v); vc.push(...le(e.length), ...e); }
+    blocks.push([4, new Uint8Array(vc)]);
+    if (o.picture) blocks.push([6, o.picture]);
+    blocks.push([1, new Uint8Array(o.padding != null ? o.padding : 4096)]);
+    let size = 4; for (const [, b] of blocks) size += 4 + b.length;
+    const out = new Uint8Array(size); out.set([0x66, 0x4c, 0x61, 0x43]); let p = 4;
+    blocks.forEach(([t, b], i) => { out[p] = (i === blocks.length - 1 ? 0x80 : 0) | t; out[p + 1] = (b.length >> 16) & 255; out[p + 2] = (b.length >> 8) & 255; out[p + 3] = b.length & 255; out.set(b, p + 4); p += 4 + b.length; });
+    return out;
+  }
+  // un canale (sottoframe): costante, fisso o LPC, il più corto
+  function sub(W, x, n, sb) {
+    let same = true; for (let i = 1; i < n && same; i++) if (x[i] !== x[0]) same = false;
+    if (same) { W.put(0, 8); W.sbits(x[0], sb); return; }
+    const fx = flacFixedBest(x, n), fo = n > 4 ? fx.o : 0;
+    flacFixedRes(x, n, fo, res); const fplan = flacRicePlan(res, n - fo, n, fo, maxPo);
+    let bestBits = fplan.bits + fo * sb, kind = 'fixed', lp = null;
+    if (n > maxOrd * 2) {
+      const cands = flacLpc(x, n, maxOrd, n === BS ? win : (() => { const w = new Float64Array(n); w.fill(1); return w; })());
+      if (cands && cands.length) {
+        // ordine: il migliore secondo la stima dei bit (errore residuo) tra alcuni ordini
+        let pick = null, pb = Infinity;
+        for (const c of cands) { const est = 0.5 * Math.log2(Math.max(1e-9, c.err / n)) * n + c.ord * (PREC + sb); if (est < pb) { pb = est; pick = c; } }
+        for (const c of [pick, cands[Math.min(cands.length - 1, 7)]]) {
+          const qz = flacQuant(c.coef, PREC); if (!qz) continue;
+          flacLpcRes(x, n, qz.q, qz.shift, res2);
+          let ok = true; for (let i = 0; i < n - c.ord; i++) if (Math.abs(res2[i]) > 1073741823) { ok = false; break; }
+          if (!ok) continue;
+          const pl = flacRicePlan(res2, n - c.ord, n, c.ord, maxPo), bits = pl.bits + c.ord * sb + 4 + 5 + c.ord * PREC;
+          if (bits < bestBits) { bestBits = bits; kind = 'lpc'; lp = { ord: c.ord, qz, plan: pl }; }
+        }
+      }
+    }
+    if (bestBits >= n * sb) { W.put(2, 8); for (let i = 0; i < n; i++) W.sbits(x[i], sb); return; }   // verbatim
+    if (kind === 'fixed') {
+      W.put(0x10 | (fo << 1), 8); for (let i = 0; i < fo; i++) W.sbits(x[i], sb);
+      flacWriteRes(W, fplan, n, fo);
+    } else {
+      const { ord, qz, plan } = lp;
+      W.put(0x40 | ((ord - 1) << 1), 8); for (let i = 0; i < ord; i++) W.sbits(x[i], sb);
+      W.put(PREC - 1, 4); W.sbits(qz.shift, 5); for (const c of qz.q) W.sbits(c, PREC);
+      flacWriteRes(W, plan, n, ord);
+    }
+  }
+  const M = new Float64Array(BS), S = new Float64Array(BS);
+  // un frame: chans = Int32Array/Float64Array per canale, n campioni (n = 4096 salvo l'ultimo)
+  function frame(chans, n) {
+    const W = flacBits(n * nch * 4 + 64);
+    let mode = nch - 1, X = chans, sbs = chans.map(() => bps);
+    if (nch === 2 && n > 4) {
+      const L = chans[0], R = chans[1];
+      for (let i = 0; i < n; i++) { M[i] = Math.floor((L[i] + R[i]) / 2); S[i] = L[i] - R[i]; }
+      const eL = flacFixedBest(L, n).err, eR = flacFixedBest(R, n).err, eM = flacFixedBest(M, n).err, eS = flacFixedBest(S, n).err;
+      const opts = [[eL + eR, 1, [L, R], [bps, bps]], [eL + eS, 8, [L, S], [bps, bps + 1]], [eR + eS, 9, [S, R], [bps + 1, bps]], [eM + eS, 10, [M, S], [bps, bps + 1]]];
+      opts.sort((a, b) => a[0] - b[0]); [, mode, X, sbs] = opts[0];
+    }
+    const bsCode = n === BS ? 12 : 7, srCode = FLAC_SR[sr] || (sr % 1000 === 0 && sr / 1000 < 256 ? 12 : sr < 65536 ? 13 : sr % 10 === 0 && sr / 10 < 65536 ? 14 : 0);
+    const hdr = [0xff, 0xf8, (bsCode << 4) | srCode, (mode << 4) | ({ 8: 1, 12: 2, 16: 4, 20: 5, 24: 6 }[bps] << 1), ...flacUtf8(frameNo)];
+    if (bsCode === 7) hdr.push(((n - 1) >> 8) & 255, (n - 1) & 255);
+    if (srCode === 12) hdr.push(sr / 1000); else if (srCode === 13) hdr.push(sr >> 8, sr & 255); else if (srCode === 14) hdr.push((sr / 10) >> 8, (sr / 10) & 255);
+    let c8 = 0; for (const b of hdr) c8 = CRC8[c8 ^ b]; hdr.push(c8);
+    for (const b of hdr) W.put(b, 8);
+    for (let c = 0; c < nch; c++) sub(W, X[c], n, sbs[c]);
+    W.align();
+    const body = W.bytes(); let c16 = 0; for (let i = 0; i < body.length; i++) c16 = ((c16 << 8) & 0xffff) ^ FLAC_CRC16[(c16 >> 8) ^ body[i]];
+    const out = new Uint8Array(body.length + 2); out.set(body); out[body.length] = c16 >> 8; out[body.length + 1] = c16 & 255;
+    frameNo++; written += n; fmin = fmin ? Math.min(fmin, out.length) : out.length; fmax = Math.max(fmax, out.length); return out;
+  }
+  return { header, frame, BS, info: () => ({ frames: frameNo, samples: written }) };
+}
+
+/* --- salvataggio del remix: lettura, elaborazione, effetti, codifica e caricamento, a pezzi ---
+   1) il FLAC in memoria viene decodificato a pezzi di 10 s alla sua frequenza (niente ricampionamento);
+   2) velocità e tonalità: vocoder di fase (tonalità invariata) e/o ricampionamento sinc;
+   3) equalizzatore, effetti, batteria e basso: lo stesso schema del Remix dal vivo, in un motore audio «offline», 20 s alla volta
+      (ogni pezzo riparte qualche secondo prima, così riverbero ed eco continuano senza giunture);
+   4) limitatore, 24 bit, codifica FLAC e caricamento su Dropbox a pezzi da 8 MB (sessione di caricamento). */
+const RXS = { job: null, last: null };
+const RXS_DIR = '/Remix', RXS_CH = 20, RXS_PIECE = 8 * 1048576;
+const rxsAbort = () => { if (RXS.job && RXS.job.cancel) throw new Error('annullato'); };
+let rxsLast = 0;
+async function rxsYield() { if (performance.now() - rxsLast > 30) { await new Promise(r => setTimeout(r, 0)); rxsLast = performance.now(); } rxsAbort(); }
+// impostazioni del momento (il remix non cambia se tocchi i comandi mentre si salva)
+function rxsSnapshot(t) {
+  const on = RX.on, b = rxBeat(), dr = on && RX.drums.on && rxReady() ? RX.drums : null;
+  return {
+    t, file: fileOf(t), rate: on ? RX.rate : 1, vinyl: on && RX.vinyl, semi: on ? RX.semi : 0, fx: on ? JSON.parse(JSON.stringify(RX.fx)) : {},
+    eq: EQ.on ? EQ.gains.slice() : null, bpm: b ? b.bpm : 120, preset: RX.preset,
+    drums: dr && {
+      vol: dr.vol, bassVol: dr.bassVol, grid: JSON.parse(JSON.stringify(dr.grid)), groove: rxGroove(), realOn: dr.sound === 'real' && !!RXK.kit, times: RXA.times.slice(), baseTimes: RXA.base.times.slice(), roots: RXA.roots ? RXA.roots.slice() : null, key: b.key, tune: b.tune || 0, down: b.down, nudge: b.nudge || 0, pattern: dr.pattern,
+    },
+  };
+}
+const rxsFxOn = S => Object.values(S.fx).some(f => f.on);
+function rxsDesc(S) {
+  const fx = S.fx, p = [], n = { rev: 'riverbero', echo: 'eco', filt: 'filtro', dist: 'distorsione', flang: 'flanger', pan8: 'audio 8D' };
+  if (S.preset && S.preset !== 'custom' && S.preset !== 'none' && RXPRE[S.preset]) p.push('preset «' + RXPRE[S.preset] + '»');
+  if (Math.abs(S.rate - 1) > 0.001) p.push(`velocità ${S.rate.toFixed(2).replace('.', ',')}×${S.vinyl ? ' (anche il tono, come un disco)' : ''}`);
+  if (S.semi) p.push(`tonalità ${S.semi > 0 ? '+' : '−'}${Math.abs(S.semi)} semitoni`);
+  for (const k of Object.keys(n)) if (fx[k] && fx[k].on) p.push(n[k]);
+  if (S.eq) p.push('equalizzatore');
+  if (S.drums) p.push(`batteria ${S.drums.realOn ? 'vera' : 'sintetica'}${S.drums.groove ? ` «${S.drums.groove.nome}»` : ''}, basso`);
+  return p.join(', ') || 'nessuna modifica';
+}
+// decodifica del pezzo [f0, f1) alla frequenza del file; → array di canali (1 o 2)
+async function rxsDecode(blob, ix, f0, f1) {
+  const n = f1.sample - f0.sample, ab = await flacRange(blob, ix, f0, f1).arrayBuffer();
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext, oc = new OAC(1, 128, ix.sr);
+  const buf = await new Promise((res, rej) => { const p = oc.decodeAudioData(ab, res, rej); if (p && p.catch) p.catch(rej); });
+  if (buf.sampleRate !== ix.sr) throw new Error(`il browser ha decodificato a ${buf.sampleRate} Hz invece di ${ix.sr}`);
+  const ch = []; for (let c = 0; c < buf.numberOfChannels; c++) ch.push(buf.getChannelData(c));
+  let out = ch;
+  if (ch.length > 2) {                       // più di due canali: li riduco a stereo come fa il motore audio
+    const L = new Float32Array(buf.length), R = new Float32Array(buf.length), s = Math.SQRT1_2;
+    for (let i = 0; i < buf.length; i++) { L[i] = ch[0][i] + (ch.length >= 6 ? s * (ch[2][i] + ch[4][i]) : 0); R[i] = ch[1][i] + (ch.length >= 6 ? s * (ch[2][i] + ch[5][i]) : 0); }
+    out = [L, R];
+  }
+  if (buf.length !== n) {                    // non dovrebbe succedere: allineo comunque la durata
+    log(`Salva remix: pezzo di ${buf.length} campioni invece di ${n}, corretto`);
+    out = out.map(a => { const b = new Float32Array(n); b.set(a.subarray(0, n)); return b; });
+  }
+  return out;
+}
+function rxsIR(size, sr) {                   // riverbero: come reverbIR, alla frequenza del file
+  const len = Math.floor(sr * (0.4 + size * 4.2)), b = new AudioBuffer({ numberOfChannels: 2, length: len, sampleRate: sr }), decay = 1.6 + size * 2.5;
+  for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay); }
+  return b;
+}
+function rxsSine(freq, sr) { const per = 1 / freq, len = Math.ceil(per * sr) + 2, b = new AudioBuffer({ numberOfChannels: 1, length: len, sampleRate: sr }), d = b.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.sin(2 * Math.PI * freq * i / sr); return b; }
+// suoni della batteria alla frequenza del file: quelli veri decodificati di nuovo, quelli sintetici ricreati
+async function rxsKitAt(S) {
+  const sr = S.sr;
+  if (S.drums.realOn && RXK.kit) {
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext, oc = new OAC(1, 128, sr), buf = {};
+    for (const [k, arr] of Object.entries(RXK.kit.suoni)) {
+      buf[k] = [];
+      for (const b64 of arr) { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); buf[k].push(await new Promise((res, rej) => { const q = oc.decodeAudioData(u.buffer, res, rej); if (q && q.catch) q.catch(rej); })); }
+    }
+    S.realBuf = buf;
+  }
+  S.kitBuf = await rxKitMake(sr);
+}
+// tutti i colpi del brano (secondi del remix), con la stessa logica di drumTick
+function rxsHits(S) {
+  const D = S.drums, out = []; if (!D) return out;
+  const times = D.times, r = S.rate, nud = D.nudge / 1000, gr = D.groove;
+  for (let k = 0; k + 1 < times.length; k++) {
+    const len = times[k + 1] - times[k];
+    for (let j = 0; j < 4; j++) {
+      const st = times[k] + j / 4 * len + nud, pos = (((k - D.down) % 4 + 4) % 4) * 4 + j;
+      if (gr && j === 0) for (const [fr, ins, vel] of gr.by[((k - D.down) % gr.L + gr.L) % gr.L]) out.push([ins, (times[k] + fr * len + nud) / r, 0.3, st, vel]);
+      for (const [row] of RXROWS) if (D.grid[row][pos] && (!gr || row === 'bass')) out.push([row, st / r, len / 2 / r, st]);
+    }
+  }
+  return out.filter(h => h[1] >= 0).sort((a, b) => a[1] - b[1]);
+}
+// equalizzatore ed effetti: stesso schema e stessi valori di rxChain/applyEq
+function rxsFx(ctx, src, dst, S, t0) {
+  const G = v => { const g = ctx.createGain(); g.gain.value = v; return g; }, fx = S.fx;
+  let cur = src;
+  if (S.eq) {
+    const pre = G(Math.pow(10, -Math.max(0, ...S.eq) * 0.8 / 20)); cur.connect(pre); cur = pre;
+    BANDS.forEach((f, i) => { const b = ctx.createBiquadFilter(); b.type = i === 0 ? 'lowshelf' : i === BANDS.length - 1 ? 'highshelf' : 'peaking'; b.frequency.value = f; b.Q.value = 1.1; b.gain.value = S.eq[i] || 0; cur.connect(b); cur = b; });
+  }
+  const lfo = (buf, freq, depth, target) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.loopEnd = 1 / freq; const g = G(depth); s.connect(g); g.connect(target); s.start(0, (t0 * freq % 1) / freq); };
+  if (fx.filt && fx.filt.on) { const f = ctx.createBiquadFilter(), c = rxFiltCfg(fx.filt); f.type = c.type; f.frequency.value = c.freq; f.Q.value = c.Q; cur.connect(f); cur = f; }
+  if (fx.dist && fx.dist.on) { const ws = ctx.createWaveShaper(), d = rxDistCfg(fx.dist.amt), out = G(d.out); ws.oversample = '4x'; ws.curve = d.curve; cur.connect(ws); ws.connect(out); cur = out; }
+  const mixUnit = (wetFrom, dry, wet) => { const out = G(1), d = G(dry), w = G(wet); cur.connect(d); d.connect(out); wetFrom.connect(w); w.connect(out); cur = out; };
+  if (fx.flang && fx.flang.on) {
+    const dl = ctx.createDelay(0.05); dl.delayTime.value = 0.004; const fb = G(0.45); dl.connect(fb); fb.connect(dl); cur.connect(dl);
+    lfo(S.lfoFl, 0.05 + fx.flang.speed * 1.5, 0.0025, dl.delayTime); mixUnit(dl, 1 - fx.flang.mix * 0.5, fx.flang.mix * 0.8);
+  }
+  if (fx.echo && fx.echo.on) {
+    const dl = ctx.createDelay(4), fb = G(fx.echo.fb), lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4500;
+    dl.delayTime.value = rxEchoSec(S.bpm, fx.echo.div, S.rate); dl.connect(lp); lp.connect(fb); fb.connect(dl); cur.connect(dl); mixUnit(dl, 1, fx.echo.mix);
+  }
+  if (fx.rev && fx.rev.on) { const cv = ctx.createConvolver(); cv.buffer = S.ir; cur.connect(cv); mixUnit(cv, 1 - fx.rev.mix * 0.3, fx.rev.mix * 1.4); }
+  if (fx.pan8 && fx.pan8.on && ctx.createStereoPanner) { const p = ctx.createStereoPanner(); lfo(S.lfoPan, 0.03 + fx.pan8.speed * 0.6, 0.85, p.pan); cur.connect(p); cur = p; }
+  cur.connect(dst);
+}
+// un pezzo nel motore offline: inp = campioni dal punto t0 (in campioni del remix), len = campioni da produrre
+async function rxsRender(S, inp, c0, len, hits) {
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext, oc = new OAC(2, len, S.sr);
+  const buf = oc.createBuffer(inp.length, inp[0].length, S.sr); inp.forEach((a, c) => buf.getChannelData(c).set(a));
+  const src = oc.createBufferSource(); src.buffer = buf;
+  const master = oc.createGain(); master.connect(oc.destination);
+  rxsFx(oc, src, master, S, c0 / S.sr);
+  if (S.drums) {
+    const D = S.drums, drum = oc.createGain(), bass = oc.createGain(); drum.gain.value = D.vol; bass.gain.value = D.bassVol; drum.connect(master); bass.connect(master);
+    const T = { ctx: oc, drum, bass, real: S.realBuf, kit: S.kitBuf, key: D.key, tune: D.tune, rootAt: s => { if (!D.roots) return null; const k = rxBeatAt(D.baseTimes, s); return D.roots[Math.max(0, Math.min(D.roots.length - 1, k))]; } };
+    const a = c0 / S.sr, b = (c0 + len) / S.sr;
+    for (const [row, w, l, at, vel] of hits) { if (w >= b) break; if (w < a - 3) continue; rxHit(T, row, w - a, l, at, vel); }
+  }
+  src.start(0);
+  const out = await oc.startRendering();
+  return [out.getChannelData(0), out.getChannelData(1)];
+}
+// caricamento su Dropbox a pezzi (sessione); un file piccolo va in una sola chiamata
+function rxsUploader(path) {
+  let sid = null, off = 0, parts = [], size = 0;
+  async function call(ep, arg, body, tries = 4) {
+    for (let k = 0; ; k++) {
+      rxsAbort();
+      try {
+        const tok = await getToken();
+        const r = await fetch(CONTENT + 'files/' + ep, { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': hdrJson(arg) }, body });
+        if (r.ok) return r.json();
+        const txt = await r.text().catch(() => '');
+        if (r.status === 401 && k === 0) { accessToken = null; continue; }
+        if (r.status === 409 && /incorrect_offset/.test(txt)) { const m = txt.match(/"correct_offset":\s*(\d+)/); const e = new Error('offset'); e.correct = m ? +m[1] : null; throw e; }
+        if (/scope|missing_scope/i.test(txt)) throw new Error('manca il permesso di scrittura su Dropbox: in Impostazioni tocca «Ricollega con il salvataggio»');
+        if (/insufficient_space/.test(txt)) throw new Error('spazio su Dropbox esaurito');
+        if (r.status < 500 && r.status !== 429) throw new Error(`Dropbox ha risposto ${r.status}: ${txt.slice(0, 160)}`);
+        throw Object.assign(new Error(`Dropbox ${r.status}`), { retry: true });
+      } catch (e) {
+        if (e.message === 'offset' || e.message === 'annullato' || !(e.retry || e instanceof TypeError) || k + 1 >= tries) throw e;
+        await new Promise(res => setTimeout(res, 1500 * (k + 1)));
+      }
+    }
+  }
+  async function send(final, commit) {
+    const body = new Blob(parts), n = body.size; parts = []; size = 0;
+    const cursor = () => ({ session_id: sid, offset: off });
+    for (let k = 0; k < 3; k++) {
+      try {
+        if (final) { const r = sid ? await call('upload_session/finish', { cursor: cursor(), commit }, body) : await call('upload', commit, body); off += n; return r; }
+        if (!sid) { const r = await call('upload_session/start', { close: false }, body); sid = r.session_id; } else await call('upload_session/append_v2', { cursor: cursor(), close: false }, body);
+        off += n; return null;
+      } catch (e) {
+        if (e.message !== 'offset' || e.correct == null) throw e;
+        if (e.correct === off + n) { off += n; return null; }        // era già arrivato
+        if (e.correct !== off) throw new Error('caricamento fuori sequenza');
+      }
+    }
+    throw new Error('caricamento non riuscito');
+  }
+  return {
+    async add(bytes) { parts.push(bytes); size += bytes.length; if (size >= RXS_PIECE) await send(false); },
+    finish: commit => send(true, commit),
+    sent: () => off + size,
+  };
+}
+// nome libero nella cartella Remix: «Artista - Titolo (Remix).flac», poi «(Remix 2)»…
+async function rxsFreeName(artist, title) {
+  const clean = s => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '').slice(0, 90);
+  const base = (artist ? clean(artist) + ' - ' : '') + clean(title || 'Brano');
+  for (let k = 1; k < 60; k++) {
+    const suf = k === 1 ? 'Remix' : 'Remix ' + k, path = `${RXS_DIR}/${base} (${suf}).flac`;
+    try { await api('files/get_metadata', { path }); }
+    catch (e) { if (e.status === 409) return { path, suf }; throw e; }
+  }
+  return { path: `${RXS_DIR}/${base} (Remix ${Date.now()}).flac`, suf: 'Remix' };
+}
+// copertina: quella incorporata nel FLAC o, se manca, l'immagine dell'album (se non è troppo grande)
+async function rxsPicture(blob, ix, t) {
+  try {
+    let pos = 4; const rd = async (a, n) => new Uint8Array(await blob.slice(a, a + n).arrayBuffer());
+    const id3 = await rd(0, 10); if (id3[0] === 0x49 && id3[1] === 0x44 && id3[2] === 0x33) pos += 10 + (((id3[6] & 0x7f) << 21) | ((id3[7] & 0x7f) << 14) | ((id3[8] & 0x7f) << 7) | (id3[9] & 0x7f));
+    for (let g = 0; g < 256 && pos < ix.audio; g++) {
+      const h = await rd(pos, 4), type = h[0] & 0x7f, len = (h[1] << 16) | (h[2] << 8) | h[3];
+      if (type === 6 && len < 4194304) return await rd(pos + 4, len);
+      if (h[0] & 0x80) break; pos += 4 + len;
+    }
+  } catch (e) {}
+  const al = LIB.albums.get(t.albumKey), f = al && al.img && IDX.files[al.img];
+  if (!f || f[1] > 3 * 1048576) return null;
+  try {
+    const tok = await getToken(), r = await fetch(CONTENT + 'files/download', { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok, 'Dropbox-API-Arg': hdrJson({ path: al.img }) } });
+    if (!r.ok) return null;
+    const img = new Uint8Array(await r.arrayBuffer()), mime = img[0] === 0x89 && img[1] === 0x50 ? 'image/png' : 'image/jpeg', m = new TextEncoder().encode(mime);
+    const be = v => [(v >>> 24) & 255, (v >> 16) & 255, (v >> 8) & 255, v & 255], head = [...be(3), ...be(m.length), ...m, ...be(0), ...be(0), ...be(0), ...be(0), ...be(0), ...be(img.length)];
+    const out = new Uint8Array(head.length + img.length); out.set(head); out.set(img, head.length); return out;
+  } catch (e) { return null; }
+}
+const rxsSet = (phase, prog) => { if (!RXS.job) return; RXS.job.phase = phase; if (prog != null) RXS.job.prog = prog; rxsPaint(); };
+function rxsPaint() {
+  const p = document.querySelector('#rxBox [data-rxs]'); if (!p || !RXS.job) return;
+  const j = RXS.job; p.textContent = `${j.phase}${j.prog != null ? ' ' + Math.round(j.prog * 100) + '%' : ''}${j.sent ? ` · caricati ${(j.sent / 1048576).toFixed(0)} MB` : ''}`;
+}
+function rxsCanSave(t) {
+  if (!canWrite()) return 'Per salvarlo serve il salvataggio su Dropbox: in Impostazioni tocca «Ricollega con il salvataggio».';
+  if (!t) return 'Fai partire un brano.';
+  if (t.ext !== 'flac' || t.start != null) return 'Per ora si possono salvare i remix dei brani FLAC (non quelli dentro un file unico con .cue).';
+  if (RX.drums.on && !rxReady()) return 'Aspetta che finisca l\'analisi del ritmo.';
+  return '';
+}
+const rxsCat = parts => parts[0].map((_, c) => { const n = parts.reduce((t, p) => t + p[c].length, 0), z = new Float32Array(n); let o = 0; for (const p of parts) { z.set(p[c], o); o += p[c].length; } return z; });
+async function rxSaveRemix() {
+  const t = curTrack(), why = rxsCanSave(t); if (why) { toast(why); return; }
+  if (RXS.job) return;
+  RXS.job = { phase: 'Preparo…', prog: null, cancel: false, sent: 0 }; RXS.last = null; refreshRx();
+  const t0 = performance.now(); let lock = null;
+  const relock = async () => { try { if (navigator.wakeLock && document.visibilityState === 'visible' && RXS.job) lock = await navigator.wakeLock.request('screen'); } catch (e) {} };
+  document.addEventListener('visibilitychange', relock); relock();
+  try {
+    if (!curBlob || curBlob.file !== fileOf(t) || !curBlob.blob) {
+      if (!CURDL) fetchCurrent(t); rxsSet('Aspetto che il brano sia in memoria…', null);
+      for (let k = 0; k < 600 && !(curBlob && curBlob.file === fileOf(t) && curBlob.blob); k++) { await new Promise(r => setTimeout(r, 200)); rxsAbort(); }
+      if (!curBlob || curBlob.file !== fileOf(t) || !curBlob.blob) throw new Error('il brano non è arrivato in memoria');
+    }
+    if (RX.on && RX.drums.on) { await rxKit(); if (RX.drums.sound === 'real') await rxLoad('kit'); }
+    const S = rxsSnapshot(t), blob = curBlob.blob, ix = await flacIndex(blob), sr = ix.sr, nchIn = Math.min(2, ((ix.si[12] >> 1) & 7) + 1);
+    S.sr = sr; if (S.drums) await rxsKitAt(S);
+    const p = Math.pow(2, S.semi / 12), r = S.rate, alpha = S.vinyl ? p : p / r, rho = S.vinyl ? r * p : p, fx = S.fx;
+    const nSong = Math.round(ix.total / r);
+    // coda del riverbero e dell'eco alla fine, e «rincorsa» di ogni pezzo perché gli effetti continuino senza giunture
+    const echoSec = fx.echo && fx.echo.on ? rxEchoSec(S.bpm, fx.echo.div, r) : 0, echoDecay = echoSec ? Math.min(20, echoSec * Math.log(0.001) / Math.log(Math.max(0.05, fx.echo.fb))) : 0;
+    const revSec = fx.rev && fx.rev.on ? 0.4 + fx.rev.size * 4.2 : 0;
+    const PRE = Math.ceil(Math.max(1.5, revSec + 0.2, echoDecay, fx.flang && fx.flang.on ? 0.3 : 0) * sr);
+    const nTotal = nSong + Math.round(Math.min(8, Math.max(revSec, echoDecay)) * sr);
+    if (fx.rev && fx.rev.on) S.ir = rxsIR(fx.rev.size, sr);
+    if (fx.flang && fx.flang.on) S.lfoFl = rxsSine(0.05 + fx.flang.speed * 1.5, sr);
+    if (fx.pan8 && fx.pan8.on) S.lfoPan = rxsSine(0.03 + fx.pan8.speed * 0.6, sr);
+    const hits = rxsHits(S), info = trackInfo(t), al = LIB.albums.get(t.albumKey), g = tagOf(t) || {};
+    rxsSet('Preparo…', null);
+    const name = await rxsFreeName(info.artist, info.title), pic = await rxsPicture(blob, ix, t);
+    // velocità e tonalità: vocoder (allunga o accorcia senza cambiare il tono) e/o ricampionamento (cambia il tono)
+    const stages = [];
+    if (Math.abs(alpha - 1) > 1e-6) stages.push({ p: rxsStretcher(nchIn, 4096 * Math.pow(2, Math.max(0, Math.round(Math.log2(sr / 48000)))), alpha), end: Math.round(ix.total * alpha) });
+    if (Math.abs(rho - 1) > 1e-6) stages.push({ p: rxsResampler(nchIn, rho), end: nSong });
+    const pipe = x => { let y = x; for (const st of stages) { if (!y) break; y = st.p.push(y); } return y; };
+    const flush = () => { let y = null; for (const st of stages) { const parts = []; if (y) { const a = st.p.push(y); if (a) parts.push(a); } const e = st.p.end(st.end); if (e) parts.push(e); y = parts.length ? rxsCat(parts) : null; } return y; };
+    const SM = rxsFifo(nchIn); let msIn = 0, nIn = 0, f0 = { off: ix.audio, sample: 0 }, ended = false;
+    async function fill(upto) {                   // decodifico finché ho il remix fino a «upto»
+      while (SM.end() < upto && !ended) {
+        rxsAbort();
+        const target = f0.sample + 10 * sr, f1 = target >= ix.total - 1 ? { off: blob.size, sample: ix.total } : await flacFindFrame(blob, ix, target);
+        const x = await rxsDecode(blob, ix, f0, f1); f0 = f1;
+        for (const c of x) { for (let i = 0; i < c.length; i++) msIn += c[i] * c[i]; nIn += c.length; }
+        const step = Math.ceil(sr / 2);
+        for (let i = 0; i < x[0].length; i += step) { const y = pipe(x.map(c => c.subarray(i, i + step))); if (y) SM.push(y); await rxsYield(); }
+        if (f0.sample >= ix.total) { ended = true; const y = flush(); if (y) SM.push(y); }
+      }
+      if (SM.end() < upto) SM.zeros(upto - SM.end());          // dopo la fine del brano: silenzio, suona solo la coda
+    }
+    // il file si tiene in memoria e si carica alla fine (così l'intestazione ha il volume misurato); se fosse enorme
+    // lo carico mentre si crea, con il volume del brano originale
+    const big = nTotal * 2 * 3 * 0.75 > 160 * 1048576;
+    const lim = rxsLimiter(2, sr, 0.989), enc = flacEncoder({ sr, nch: 2, bps: 24, total: nTotal, picture: pic, vendor: 'Basalto ' + VERSION });
+    const up = rxsUploader(name.path), title = `${info.title} (${name.suf})`, held = [];
+    const srcGain = g.tg != null ? g.tg : g.ag != null ? g.ag : null;
+    const tags = gain => [['TITLE', title], ['ARTIST', info.artist || ''], ['ALBUM', 'Remix'], ['ALBUMARTIST', 'Artisti vari'], ['DATE', String(new Date().getFullYear())],
+      ...(g.g ? [['GENRE', g.g]] : []), ['COMMENT', `Remix di «${info.title}»${al ? ` (${info.artist || al.artistName || ''}, ${al.title}${al.year ? ', ' + al.year : ''})` : ''} fatto con Basalto: ${rxsDesc(S)}.`], ['ENCODER', 'Basalto ' + VERSION],
+      ...(gain ? [['REPLAYGAIN_TRACK_GAIN', gain.db.toFixed(2) + ' dB'], ['REPLAYGAIN_TRACK_PEAK', gain.peak.toFixed(6)], ['REPLAYGAIN_ALBUM_GAIN', gain.db.toFixed(2) + ' dB'], ['REPLAYGAIN_ALBUM_PEAK', gain.peak.toFixed(6)]] : [])];
+    if (big) await up.add(enc.header(tags(srcGain != null ? { db: srcGain, peak: 0.989 } : null)));
+    const carry = [new Int32Array(enc.BS), new Int32Array(enc.BS)];
+    let cn = 0, done = 0, skip = lim.L, msOut = 0, peak = 0;
+    async function emit(ch) {                     // campioni finali → 24 bit → frame FLAC
+      for (let i = 0; i < ch[0].length; i++) {
+        if (skip) { skip--; continue; }
+        if (done + cn >= nTotal) break;
+        for (let c = 0; c < 2; c++) { const v = ch[c][i]; msOut += v * v; const a = v < 0 ? -v : v; if (a > peak) peak = a; carry[c][cn] = Math.max(-8388608, Math.min(8388607, Math.round(v * 8388607))); }
+        if (++cn === enc.BS || done + cn === nTotal) {
+          const fr = enc.frame(carry, cn); done += cn; cn = 0;
+          if (big) await up.add(fr); else held.push(fr);
+          RXS.job.sent = big ? up.sent() : 0; rxsSet('Creo il remix…', done / nTotal); await rxsYield();
+        }
+      }
+    }
+    rxsSet('Creo il remix…', 0);
+    for (let c0 = 0; c0 < nTotal; c0 += RXS_CH * sr) {
+      const c1 = Math.min(nTotal, c0 + RXS_CH * sr), pre = Math.min(c0, PRE);
+      await fill(c1);
+      const out = await rxsRender(S, SM.take(c0 - pre, c1), c0 - pre, c1 - c0 + pre, hits); rxsAbort();
+      SM.drop(c1 - PRE);
+      await emit(lim.process(out.map(a => a.subarray(pre))));
+    }
+    await emit(lim.process([new Float32Array(lim.L), new Float32Array(lim.L)]));
+    if (done !== nTotal) throw new Error(`durata sbagliata (${done} campioni invece di ${nTotal})`);
+    // volume uniforme: il guadagno del brano originale, corretto di quanto il remix è più forte o più piano
+    const delta = msIn > 0 && msOut > 0 ? 10 * Math.log10((msOut / (2 * nTotal)) / (msIn / nIn)) : 0;
+    if (!big) {
+      const head = enc.header(tags(srcGain != null ? { db: srcGain - delta, peak } : null)), total = head.length + held.reduce((a, b) => a + b.length, 0);
+      await up.add(head);
+      while (held.length) { await up.add(held.shift()); RXS.job.sent = up.sent(); rxsSet('Carico su Dropbox…', up.sent() / total); }
+    }
+    rxsSet('Finisco il caricamento…', null);
+    const meta = await up.finish({ path: name.path, mode: 'add', autorename: true, mute: false });
+    const secs = (performance.now() - t0) / 1000, li = lim.info(), st = stages.map(s => s.p.info ? s.p.info() : null).find(Boolean);
+    RXS.last = { ok: true, title, path: (meta && meta.path_display) || name.path, size: up.sent(), dur: nTotal / sr, secs, limited: li.limited / sr };
+    log(`Remix salvato: ${RXS.last.path} · ${fmtTime(nTotal / sr)} · ${sr} Hz, 24 bit · ${(up.sent() / 1048576).toFixed(1)} MB · ${rxsDesc(S)} · in ${secs.toFixed(0)} s` +
+      ` · volume ${delta >= 0 ? '+' : '−'}${Math.abs(delta).toFixed(1)} dB rispetto all'originale` +
+      (li.limited ? ` · limitatore attivo per ${(li.limited / sr).toFixed(1)} s (al massimo −${(-20 * Math.log10(li.minGain)).toFixed(1)} dB)` : '') +
+      (st ? ` · vocoder: ${st.frames} blocchi, ${st.resets} attacchi riallineati` : ''));
+    toast('Remix salvato nella cartella Remix');
+    syncIndex();
+  } catch (e) {
+    RXS.last = { ok: false, err: e.message };
+    log('Salva remix: ' + (e.message === 'annullato' ? 'annullato' : 'non riuscito · ' + e.message + (e.stack ? ' · ' + String(e.stack).split('\n')[1] : '')));
+    if (e.message !== 'annullato') toast('Remix non salvato: ' + e.message);
+  } finally {
+    document.removeEventListener('visibilitychange', relock);
+    try { if (lock) lock.release(); } catch (e) {}
+    RXS.job = null; refreshRx();
+  }
+}
+
+// riquadro «Salva il remix» in fondo al pannello
+function rxsBox() {
+  const t = curTrack(), why = rxsCanSave(t), box = h('div', { class: 'rxsave' });
+  if (RXS.job) {
+    box.append(h('p', { class: 'small', style: 'margin:0', 'data-rxs': '' }, RXS.job.phase),
+      h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: () => { if (RXS.job) { RXS.job.cancel = true; rxsSet('Annullo…', null); } } }, 'Annulla')),
+      h('p', { class: 'small mut' }, 'Tieni Basalto aperto e lo schermo acceso: se cambi app il salvataggio si ferma finché non torni.'));
+    setTimeout(rxsPaint, 0); return box;
+  }
+  box.append(h('p', { class: 'small mut', style: 'margin:0' }, 'Crea un nuovo file FLAC con quello che senti (velocità, tono, effetti, equalizzatore, batteria e basso) nella cartella Remix di Dropbox: lo trovi in libreria nell\'album «Remix». Il brano originale non cambia.'));
+  const L = RXS.last;
+  if (L) box.append(h('p', { class: 'small', style: 'margin:0' }, L.ok ? `Salvato: «${L.title}» · ${fmtTime(L.dur)} · ${(L.size / 1048576).toFixed(0).replace('.', ',')} MB · in ${Math.round(L.secs)} s${L.limited > 0.05 ? ' · nei punti più forti ho abbassato appena il volume per non distorcere' : ''}` : L.err === 'annullato' ? 'Salvataggio annullato: su Dropbox non è rimasto niente.' : 'Non salvato: ' + L.err));
+  if (why) box.append(h('p', { class: 'small', style: 'margin:0' }, why));
+  else box.append(h('div', { class: 'btnrow' }, h('button', { class: 'btn', onclick: () => rxSaveRemix() }, 'Salva su Dropbox')));
+  return box;
 }
 
 /* ---------------- interruttori delle impostazioni (come quelli di iOS) ---------------- */
@@ -3352,7 +4080,7 @@ function backBtnLabeled(label) {
 /* ---------------- dati personali: preferiti, playlist, ascolti ----------------
    Restano sul dispositivo e, con il permesso di scrittura, nel file /_player/dati.json della cartella
    dell'app, uguale su iPhone e PC. Con lo stesso permesso il Remix copia in /_batteria/ i suoni e i ritmi
-   della batteria vera. Il player non scrive nient'altro su Dropbox e non tocca mai la musica. */
+   della batteria vera e salva in /Remix/ i remix (file nuovi). Il player non scrive nient'altro su Dropbox e non tocca mai la musica. */
 const DATA_PATH = '/_player/dati.json';
 const HIST_MAX = 3000;
 function normUD(d) {
@@ -3745,7 +4473,7 @@ function udBox() {
     const when = udLastSync ? ' · sincronizzati alle ' + new Date(udLastSync).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : '';
     const status = w ? (udError ? 'Salvati su Dropbox · ultimo tentativo non riuscito: ' + udError : 'Salvati su Dropbox, uguali su tutti i dispositivi' + when) : 'Salvati solo su questo dispositivo';
     const kids = [h('strong', null, 'Preferiti, playlist e ascolti'), h('p', { id: 'udStatus', class: 'small mut' }, status)];
-    if (!w) kids.push(h('div', { class: 'note' }, 'Per averli uguali su iPhone e PC, e non perderli, attiva il salvataggio su Dropbox. Il player scriverà solo nella cartella dell\'app: il file ' + DATA_PATH + ' e, se nel Remix usi la batteria vera, i suoni e i ritmi nella cartella _batteria. I tuoi brani non vengono mai modificati né cancellati.',
+    if (!w) kids.push(h('div', { class: 'note' }, 'Per averli uguali su iPhone e PC, e non perderli, attiva il salvataggio su Dropbox. Il player scriverà solo nella cartella dell\'app: il file ' + DATA_PATH + '; se nel Remix usi la batteria vera, i suoni e i ritmi nella cartella _batteria; i remix che salvi, nella cartella Remix. I tuoi brani non vengono mai modificati né cancellati.',
       h('ol', { style: 'margin:8px 0 0 18px;padding:0' },
         h('li', null, 'Su dropbox.com/developers/apps apri la tua app › Permissions, spunta files.content.write e premi Submit.'),
         h('li', null, 'Torna qui e tocca il pulsante: Dropbox ti chiederà di confermare.')),

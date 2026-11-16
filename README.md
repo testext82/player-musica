@@ -5,7 +5,7 @@ Player web personale che ascolta in streaming FLAC e altri formati audio dalla *
 ## Privacy
 - Accesso Dropbox di tipo *App folder* (solo la cartella dell'app), in lettura (`files.metadata.read`, `files.content.read`).
 - Facoltativo: `files.content.write`, solo per salvare preferiti, playlist e ascolti nel file
-  `/_player/dati.json` e, se nel Remix si usa la batteria vera, i suoni e i ritmi in `/_batteria/`, sempre nella cartella dell'app.
+  `/_player/dati.json`; se nel Remix si usa la batteria vera, i suoni e i ritmi in `/_batteria/`; i remix salvati, come file nuovi, in `/Remix/`. Sempre nella cartella dell'app.
   Il player non scrive né cancella nient'altro: la musica non viene toccata.
   Senza questo permesso i dati restano solo sul dispositivo.
 - Login OAuth PKCE senza server: il permesso resta nel browser del dispositivo, nel codice non c'è nessun segreto.
@@ -30,6 +30,12 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
+
+v1.34: **salva il remix su Dropbox** (Remix › Salva il remix › «Salva su Dropbox»).
+- Crea un FLAC nuovo nella cartella `Remix` (album «Remix», artista dell'album «Artisti vari»; titolo «… (Remix)», poi «(Remix 2)»…), alla frequenza del brano originale, 24 bit, con copertina, tag e una descrizione delle modifiche. Il brano originale non cambia.
+- Contiene quello che si sente: velocità, tonalità, effetti, equalizzatore, batteria e basso. La velocità senza cambio di tono usa un vocoder di fase con fasi agganciate ai picchi e riallineate sugli attacchi; il cambio di tono un ricampionamento sinc (Kaiser). Eco e riverbero continuano senza giunture tra i pezzi e finiscono con la loro coda.
+- Limitatore (−0,1 dB, 5 ms di anticipo) solo dove batteria ed effetti farebbero distorcere. Volume uniforme: il guadagno ReplayGain dell'originale corretto di quanto il remix è più forte o più piano.
+- Tutto a pezzi da 20 s (poca memoria anche su iPhone), poi caricamento con una sessione di Dropbox a pezzi da 8 MB. Codificatore FLAC scritto per Basalto (LPC fino all'ordine 12/16, stereo con canale di differenza, Rice a partizioni), verificato bit per bit con ffmpeg.
 
 v1.33: la nota sul salvataggio in Impostazioni dice anche della cartella `_batteria` (prima diceva «un solo file»).
 
