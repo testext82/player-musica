@@ -30,6 +30,11 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.31: **batteria del Remix sui brani veri** (provata su tre brani di 39/Smooth, confrontati con madmom).
+- Scelta del livello del tempo: se a un altro livello (doppio, metà, altri picchi) cassa e rullante si alternano battito per battito molto più chiaramente, è quello giusto. Nel punk veloce prima l'app sceglieva 101 o 133 BPM invece di 200: ora 202, 200 e 185 BPM, con il 95–97% dei battiti uguali a madmom.
+- **Basso che segue gli accordi**: per ogni battito l'app riconosce la fondamentale dell'accordo (basso del brano + note dell'accordo, sequenza scelta con Viterbi) e il basso la suona, intonato con il brano. Nel pannello: «accordi Si, La, Fa♯».
+- Le scelte di tempo fatte con la v1.30 vengono rifatte (formato dei dati v3).
+
 v1.30: **batteria del Remix rifatta**.
 - L'analisi legge tutto il brano e trova ogni singolo battito (programmazione dinamica, con il tempo locale), quindi la batteria segue anche i brani suonati senza metronomo che accelerano o rallentano. Tarata su brani veri (confronto con madmom) e su brani sintetici a tempo variabile: battiti trovati tutti, scarto medio 2 ms.
 - **Aggancio al suono**: un piccolo modulo (`rx-ascolto.js`, AudioWorklet) ascolta la musica dentro il motore audio e la confronta con il file; la batteria si aggancia a quello che si sente davvero, non al contatore del lettore (su iPhone i due possono differire di decimi di secondo). Non registra niente: calcola solo l'inviluppo in 4 bande. Per caricarlo la CSP permette gli script dello stesso sito (`script-src 'self'`).
