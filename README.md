@@ -31,6 +31,10 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.38: **schermata di blocco che apre Basalto e resta aggiornata**.
+- Il manifest ha ora un `id` proprio (`"basalto"`). Con più web app dello stesso sito nella schermata Home (es. «La mia spesa», anche lei su testext82.github.io) iOS, senza id, a volte associa il riquadro «In riproduzione» all'app sbagliata: il tocco apre l'altra app e il riquadro resta fermo (bug WebKit 267810; rimedio confermato: id esplicito con un nome semplice, non un percorso). iOS legge il manifest solo all'aggiunta alla Home: **va tolta e riaggiunta l'icona di Basalto** (prima «Sincronizza ora»; dopo vanno reinseriti App key e collegamento a Dropbox e le impostazioni del telefono).
+- A ogni partenza (anche dopo il cambio di lettore quando il motore audio si accende o si spegne) titolo, copertina e comandi vengono riconfermati a iOS; dopo ogni spostamento la posizione viene rimessa subito.
+
 v1.37: **tonalità esatta, ritmi in shuffle, schermata di blocco**.
 - Tonalità dal vivo con un modulo nuovo (`rx-tono.js`, AudioWorklet): lo stesso vocoder di fase + ricampionamento del salvataggio, tono esatto (prova: 440 Hz → 493,9 Hz con +2) e ritardo fisso noto (113-139 ms), compensato per la batteria. Il vecchio metodo a «grani» (tono approssimato a ±20 Hz e ronzio) resta solo come riserva.
 - iPhone: il motore audio acceso da un cursore (tonalità, velocità) restava fermo e la musica muta finché non si premeva play. Ora si sveglia al rilascio di ogni tocco (anche con timer brevi, a cui Safari «presta» il tocco).
