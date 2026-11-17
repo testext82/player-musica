@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.41';
+const VERSION = '1.42';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -2371,30 +2371,36 @@ function applyRate(el) {
   }
 }
 
-/* --- catena degli effetti: (tono) → filtro → distorsione → flanger → eco → riverbero → 8D --- */
+/* --- catena degli effetti: (tono) → filtro → distorsione → flanger → eco → riverbero → 8D ---
+   A ogni cambio la catena si ricostruisce. v1.42: la nuova entra con una dissolvenza di 30 ms quando ha il suono pronto
+   (il modulo della tonalità ha un ritardo fisso) e la vecchia esce insieme; poi la vecchia viene spenta davvero
+   (prima veniva solo staccata di colpo: uno scatto a ogni cambio, e il modulo della tonalità restava acceso a calcolare). */
 let fxIn = null, fxMaster = null, RXN = { all: [], srcs: [] };
+const RX_FADE = 0.03;
 function rxChain() {
   if (!ac || !fxIn) return;
-  try { fxIn.disconnect(); } catch (e) {}
-  for (const s of RXN.srcs) { try { s.stop(); } catch (e) {} }
-  for (const n of RXN.all) { try { n.disconnect(); } catch (e) {} }
+  const old = RXN, t0 = ac.currentTime;
   RXN = { all: [], srcs: [] };
   const N = n => { RXN.all.push(n); return n; }, G = v => { const g = N(ac.createGain()); g.gain.value = v; return g; };
   const lfo = (freq, depth, target) => { const o = ac.createOscillator(); o.frequency.value = freq; const g = G(depth); o.connect(g); g.connect(target); o.start(); RXN.srcs.push(o); RXN.all.push(o); return { o, g }; };
-  let cur = fxIn;
+  const head = G(1); RXN.head = head; fxIn.connect(head);
+  let cur = head;
   const fx = RX.fx;
   RXN.toneLat = 0;
   if (RX.on && RX.semi) {
-    // tonalità: modulo rx-tono.js (vocoder di fase + ricampionamento, tono esatto, ritardo fisso e noto);
-    // finché il modulo non è caricato, o se manca, il vecchio spostamento a «grani» (tono approssimato)
-    const p = Math.pow(2, RX.semi / 12);
+    // tonalità: modulo rx-tono.js (vocoder di fase + ricampionamento, tono esatto, ritardo fisso e noto).
+    // Mentre il modulo arriva (pochi decimi di secondo) un attimo di silenzio; il vecchio spostamento a «grani»
+    // (tono approssimato, ronzio) solo se il modulo non si può usare
+    const p = Math.pow(2, RX.semi / 12), sr = ac.sampleRate, Nn = sr > 60000 ? 8192 : 4096, lat = rxToneLat(p, Nn);
     if (RXT.ctx === ac) {
       try {
-        const sr = ac.sampleRate, Nn = sr > 60000 ? 8192 : 4096, lat = rxToneLat(p, Nn);
         const w = N(new AudioWorkletNode(ac, 'rx-tono', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { ratio: p, N: Nn, lat } }));
+        RXN.tono = w; RXN.toneN = Nn; rxToneStats(w, RX.semi);
         cur.connect(w); cur = w; RXN.toneLat = lat / sr;
       } catch (e) { log('Tonalità: modulo non disponibile (' + e.message + '), uso il metodo semplice'); cur = pitchShifter(cur, p, N); RXN.toneLat = 0.05; }
-    } else { cur = pitchShifter(cur, p, N); RXN.toneLat = 0.05; rxToneLoad(); }
+    } else if (ac.audioWorklet && typeof AudioWorkletNode !== 'undefined' && RXT.failed !== ac) {
+      const s = G(0); cur.connect(s); cur = s; RXN.toneLat = lat / sr; RXN.waiting = true; rxToneLoad();
+    } else { cur = pitchShifter(cur, p, N); RXN.toneLat = 0.05; }
   }
   if (RX.on && fx.filt.on) {
     const f = N(ac.createBiquadFilter()); RXN.filt = f; rxFilterParams(); cur.connect(f); cur = f;
@@ -2421,7 +2427,39 @@ function rxChain() {
   if (RX.on && fx.pan8.on && ac.createStereoPanner) {
     const p = N(ac.createStereoPanner()); RXN.pan = lfo(0.03 + fx.pan8.speed * 0.6, 0.85, p.pan); cur.connect(p); cur = p;
   }
-  cur.connect(fxMaster);
+  const out = G(0); RXN.out = out; cur.connect(out); out.connect(fxMaster);
+  rxSwap(old, t0);
+}
+// dalla catena vecchia alla nuova: con lo stesso ritardo dissolvenza incrociata (nessun buco), altrimenti la vecchia
+// sfuma subito e la nuova entra appena ha il suono pronto
+function rxSwap(old, t0) {
+  // tutto parte 20 ms dopo «adesso»: un comando già nel passato farebbe partire la dissolvenza a metà (uno scatto)
+  const F = RX_FADE, s = t0 + 0.02, og = old.out && old.out.gain, ng = RXN.out.gain;
+  const cross = og && !old.waiting && Math.abs((old.toneLat || 0) - (RXN.toneLat || 0)) < 0.03;
+  // con la dissolvenza incrociata la nuova entra quando il vocoder ha già un blocco intero alle spalle (prima suona incerto)
+  const at = s + (RXN.waiting ? 0 : RXN.toneLat || 0) + (cross && RXN.toneN ? RXN.toneN / ac.sampleRate : 0), off = cross ? at : s;
+  try {
+    ng.setValueAtTime(0, s); if (at > s) ng.setValueAtTime(0, at); ng.linearRampToValueAtTime(1, at + F);
+    // livello attuale della vecchia: piena se la sua entrata è finita (non mi fido solo di .value, che su alcuni browser resta indietro)
+    if (og) { const v = old.fullAt != null && t0 >= old.fullAt ? 1 : og.value; og.cancelScheduledValues(t0); og.setValueAtTime(v, s); if (off > s) og.setValueAtTime(v, off); og.linearRampToValueAtTime(0, off + F); }
+    RXN.fullAt = at + F;
+  } catch (e) { ng.value = 1; if (og) og.value = 0; }
+  const kill = () => {
+    if (old.tono) { try { old.tono.port.onmessage = null; old.tono.port.postMessage('fine'); } catch (e) {} }    // il modulo smette di calcolare
+    if (old.head && fxIn) { try { fxIn.disconnect(old.head); } catch (e) {} }
+    for (const s of old.srcs) { try { s.stop(); } catch (e) {} }
+    for (const n of old.all) { try { n.disconnect(); } catch (e) {} }
+  };
+  if (!og) kill(); else setTimeout(kill, (off - t0 + F) * 1000 + 150);
+}
+// il modulo della tonalità manda ogni tanto i suoi numeri: quanto pesa il calcolo, buchi, picchi abbassati
+function rxToneStats(w, semi) {
+  const st = (semi > 0 ? '+' : '−') + Math.abs(semi), n1 = x => x.toFixed(1).replace('.', ',');
+  w.port.onmessage = e => {
+    const d = e.data; if (!d || d.t !== 'stat' || RXN.tono !== w) return;
+    const lim = d.minG < 0.9999 ? `picchi abbassati al massimo di ${n1(-20 * Math.log10(d.minG))} dB${d.lim ? ` (oltre 0,5 dB per ${Math.max(1, Math.round(d.lim / d.sr * 1000))} ms)` : ''}` : 'nessun picco da abbassare';
+    log(`Tonalità ${st}: calcolo ${Math.round(d.load * 100)}% del tempo disponibile${d.hr ? ` · chiamata più lenta ${n1(d.maxMs)} ms su ${n1(d.quantMs)}` : ''} · ${d.under ? d.under + ' campioni mancanti' : 'nessun buco'} · ${lim}${d.live > 1 ? ` · moduli accesi ${d.live}` : ''} (ultimi ${Math.round(d.sec)} s)`);
+  };
 }
 function rxFiltCfg(p) {
   return p.type === 'lp' ? { type: 'lowpass', freq: 150 * Math.pow(60, p.freq), Q: 1.2 } : p.type === 'hp' ? { type: 'highpass', freq: 150 * Math.pow(20, p.freq), Q: 0.9 } : { type: 'bandpass', freq: 500 * Math.pow(6, p.freq), Q: 2.2 };
@@ -2447,12 +2485,18 @@ function reverbIR(size) {
 // cambio di tono senza cambiare la velocità: due linee di ritardo modulate e dissolte a vicenda
 // ritardo del modulo di tonalità (in campioni): il tempo che serve al vocoder per avere il suono pronto, più un margine
 function rxToneLat(p, Nn) { const B = Nn / 2, H = Nn / 4, W = Math.ceil(24 / (Math.min(1, 1 / p) * (p > 1 ? 0.92 : 0.97))); return Math.ceil((W + B + H) / Math.min(p, 1) + B + 256); }
-const RXT = { ctx: null, loading: null };
+const RXT = { ctx: null, loading: null, failed: null };
 function rxToneLoad() {
   if (!ac || !ac.audioWorklet || RXT.ctx === ac || RXT.loading === ac) return;
   const ctx = ac; RXT.loading = ctx;
-  ctx.audioWorklet.addModule('rx-tono.js?v=' + VERSION).then(() => { RXT.ctx = ctx; RXT.loading = null; if (ctx === ac && RX.on && RX.semi) { rxChain(); log('Tonalità: modulo di qualità pronto'); } })
-    .catch(e => { RXT.loading = null; log('Tonalità: modulo non caricato (' + e.message + ')'); });
+  const fail = why => {                    // senza modulo: metodo semplice (se arriva più tardi, si passa comunque a quello buono)
+    if (RXT.loading === ctx) RXT.loading = null; if (RXT.ctx === ctx || RXT.failed === ctx) return;
+    RXT.failed = ctx; log('Tonalità: modulo non caricato (' + why + '), uso il metodo semplice');
+    if (ctx === ac && RX.on && RX.semi) rxChain();
+  };
+  const tm = setTimeout(() => { if (RXT.ctx !== ctx) fail('troppo lento'); }, 4000);
+  ctx.audioWorklet.addModule('rx-tono.js?v=' + VERSION).then(() => { clearTimeout(tm); RXT.ctx = ctx; RXT.loading = null; RXT.failed = null; if (ctx === ac && RX.on && RX.semi) { rxChain(); log('Tonalità: modulo di qualità pronto'); } })
+    .catch(e => { clearTimeout(tm); fail(e.message); });
 }
 // vecchio metodo (riserva): due «grani» che scorrono in una linea di ritardo; tono approssimato (±20 Hz) e un leggero ronzio
 function pitchShifter(src, ratio, N) {
@@ -3334,13 +3378,19 @@ function rxPanel() {
   if (!RX.on) return wrap;
   const custom = () => { RX.preset = 'custom'; };
   wrap.append(h('div', { class: 'eqp' }, ...Object.entries(RXPRE).map(([k, n]) => rxChip(RX.preset === k, n, () => rxPreset(k)))));
-  // velocità e tono
-  wrap.append(h('div', { class: 'rxsec' }, 'Velocità e tono'),
-    rxSlider('Velocità', 0.5, 1.5, 0.01, RX.rate, x => x.toFixed(2).replace('.', ',') + '×', x => { RX.rate = x; custom(); applyRate(); rxEchoTime(); updatePosition(); }, x => log('Remix: velocità ' + x.toFixed(2) + '×')),
+  // velocità: l'interruttore «come un disco» riguarda solo lei (v1.42: prima stava sopra la tonalità e sembrava il suo interruttore)
+  const at1 = Math.abs(RX.rate - 1) < 0.001, semiTxt = x => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x);
+  wrap.append(h('div', { class: 'rxsec' }, 'Velocità'),
+    rxSlider('Velocità', 0.5, 1.5, 0.01, RX.rate, x => x.toFixed(2).replace('.', ',') + '×', x => { RX.rate = x; custom(); applyRate(); rxEchoTime(); updatePosition(); }, x => { log('Remix: velocità ' + x.toFixed(2) + '×'); refreshRx(); }),
     h('div', { class: 'eqp' }, ...[0.75, 0.9, 1, 1.1, 1.25].map(r => rxChip(Math.abs(RX.rate - r) < 0.001, String(r).replace('.', ',') + '×', () => { RX.rate = r; custom(); applyRate(); rxEchoTime(); updatePosition(); refreshRx(); }))),
-    swRow('Cambia anche il tono', 'Come un disco girato a un\'altra velocità: è l\'effetto di «slowed» e «nightcore».', RX.vinyl, on => { RX.vinyl = on; custom(); applyRate(); refreshRx(); }),
-    rxSlider('Tonalità', -6, 6, 1, RX.semi, x => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x) + ' st', () => {}, x => { RX.semi = x; custom(); log('Remix: tonalità ' + (x > 0 ? '+' : '') + x + ' semitoni'); rxSync(); refreshRx(); }),
-    h('p', { class: 'small mut' }, 'La tonalità cambia senza toccare la velocità; la qualità è discreta, migliore entro 2–3 semitoni.'));
+    swRow('Come un disco', 'Con la velocità cambia anche il tono, come un disco girato più piano o più veloce: è l\'effetto di «slowed» e «nightcore». Vale solo per la velocità; la tonalità qui sotto è a parte.' + (at1 ? ' Con la velocità a 1,00× non cambia niente.' : ''), RX.vinyl,
+      on => { RX.vinyl = on; custom(); applyRate(); log('Remix: velocità ' + (on ? 'come un disco (cambia anche il tono)' : 'a tono invariato')); refreshRx(); }));
+  // tonalità: si sceglie solo qui; 0 = originale (e il motore audio si spegne, se non serve ad altro)
+  const setSemi = x => { if (x === RX.semi) { refreshRx(); return; } RX.semi = x; custom(); log('Remix: tonalità ' + (x > 0 ? '+' : '') + x + ' semitoni'); rxSync(); refreshRx(); };
+  wrap.append(h('div', { class: 'rxsec' }, 'Tonalità'),
+    rxSlider('Tonalità', -6, 6, 1, RX.semi, x => semiTxt(x) + ' st', () => {}, setSemi),
+    h('div', { class: 'eqp' }, ...[-2, -1, 0, 1, 2].map(x => rxChip(RX.semi === x, x ? semiTxt(x) : 'Originale', () => setSemi(x)))),
+    h('p', { class: 'small mut' }, 'Sposta il tono di semitoni senza cambiare la velocità; a 0 resta quello originale. Il suono più pulito è entro 2–3 semitoni.'));
   // effetti
   wrap.append(h('div', { class: 'rxsec' }, 'Effetti'),
     rxFxRow('rev', 'Riverbero', 'Come suonare in una stanza, una sala o una cattedrale.', () => [
@@ -3512,6 +3562,8 @@ function rxsStretcher(nch, N, alpha) {
         // sul colpo riallineo solo le frequenze che crescono di colpo (+6 dB): le note che continuano non si toccano
         if (reset) for (let k = 1; k < B; k++) if (M[k] > 2 * PM[k]) S[k] = A[k];
         S[0] = A[0]; S[B] = A[B];
+        // fasi tra −π e π (v1.42): stesso suono, ma coseno e seno restano veloci e precisi anche sui brani lunghi
+        for (let k = 1; k < B; k++) { const v = S[k]; if (v > 3.2 || v < -3.2) S[k] = v - 2 * Math.PI * Math.round(v / (2 * Math.PI)); }
       }
       P.set(A); PM.set(M);
     }
