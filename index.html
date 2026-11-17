@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.42';
+const VERSION = '1.43';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -336,7 +336,7 @@ const WRITE_SCOPE = 'files.content.write';      // solo per /_player/dati.json (
 const REDIRECT_URI = location.origin + location.pathname;
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
 const K = { updSkip: 'mx_upd_skip', user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
-            index: 'mx_index_v3', tags: 'mx_tags_v1', ameta: 'mx_ameta_v2', libView: 'mx_libview', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', preload: 'mx_preload',
+            index: 'mx_index_v3', tags: 'mx_tags_v1', ameta: 'mx_ameta_v2', libView: 'mx_libview', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', lockWake: 'mx_lockwake', preload: 'mx_preload',
             rg: 'mx_rg_v1', gap: 'mx_gap', gapBg: 'mx_gap_bg', gapLead: 'mx_gap_lead', statsP: 'mx_stats_p', pseek: 'mx_pseek',
             mb: 'mx_mb_v1', mbKind: 'mx_mb_kind', cont: 'mx_cont', theme: 'mx_theme', rhythm: 'mx_rhythm_v1', rxLag: 'mx_rx_lag', rxDrums: 'mx_rx_drums' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
@@ -1305,6 +1305,58 @@ function watchAudioSession() {      // dove Safari lo permette, la sessione audi
     prev = st;
   });
 }   // chi ha messo in pausa / fatto ripartire (per il registro)
+/* ▶ dalla schermata di blocco dopo una pausa (v1.43, tentativo).
+   iOS, con l'app aggiunta alla schermata Home: se la musica resta in pausa qualche secondo con lo schermo spento,
+   il ▶ della schermata di blocco arriva a Basalto ma il suono non riparte. Il lettore dice di suonare, il contatore
+   scorre, il tempo resta fermo e si sente solo quando si riapre l'app (WebKit 243258, aperto dal 2022: «Cannot resume
+   MediaSession from PWA after 5sec pause»). Rimedio: dopo una pausa decisa da te (tasto o schermata di blocco), per
+   10 minuti un terzo lettore suona silenzio vero (un file di zeri creato in memoria, niente rete, niente salvato),
+   così iOS tiene attiva la sessione audio di Basalto e il ▶ riparte. Mai dopo una pausa decisa da iOS (chiamata,
+   altra app, cuffie tolte): non deve riprendersi l'audio. */
+const lockWakeOn = () => load(K.lockWake) !== 'off';
+const KA_MAX = 10 * 60 * 1000;
+const KA = { el: null, t0: 0, timer: 0, on: false };
+const kaActive = () => !!(KA.on && KA.el && !KA.el.paused);       // sta davvero suonando il silenzio (iOS può averlo fermato)
+function kaSilence() {                  // WAV 16 bit mono a 22,05 kHz: 1 secondo di zeri
+  const sr = 22050, n = sr, b = new ArrayBuffer(44 + n * 2), v = new DataView(b), s = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVE'); s(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+}
+function kaStart() {                    // true se il silenzio è partito (o suonava già)
+  if (!lockWakeOn() || !curTrack() || !audio.paused) return false;
+  if (!KA.el) {
+    const el = KA.el = document.createElement('audio');
+    el.id = 'audioWake'; el.loop = true; el.preload = 'auto'; el.setAttribute('playsinline', ''); el.setAttribute('x-webkit-airplay', 'deny'); el.src = kaSilence();
+    document.body.append(el);
+  }
+  KA.t0 = Date.now(); clearTimeout(KA.timer); KA.timer = setTimeout(() => kaStop('dopo 10 minuti di pausa'), KA_MAX);
+  if (KA.on && !KA.el.paused) return true;
+  KA.on = true; KA.el.muted = false;
+  const p = KA.el.play();
+  if (p && p.catch) p.catch(e => { KA.on = false; log(`Pausa: sessione audio non tenuta sveglia (${e.name}): il ▶ della schermata di blocco potrebbe restare muto`); });
+  return true;
+}
+function kaStop(why) {
+  clearTimeout(KA.timer); KA.timer = 0;
+  const was = KA.on; KA.on = false;
+  if (KA.el && !KA.el.paused) KA.el.pause();
+  if (was && why) log(`Sessione audio lasciata riposare ${why}`);
+}
+// ▶ dalla schermata di blocco a schermo spento: dopo 3 s controllo che il tempo vada avanti davvero
+function lockPlayCheck() {
+  const el = audio, ct0 = el.currentTime, t0 = Date.now(), ka = kaActive() ? Math.round((t0 - KA.t0) / 1000) : null;
+  const how = ka != null ? `sessione audio tenuta sveglia da ${ka} s` : 'sessione audio non tenuta sveglia';
+  setTimeout(() => {
+    if (el !== audio || el.paused) return;
+    const late = Date.now() - t0 > 6000;               // il controllo arriva tardi: iOS aveva sospeso l'app
+    if (el.currentTime - ct0 > 0.5) { log(`✓ Suono ripartito a schermo spento (${how})`); return; }
+    if (late || !isHidden()) { log(`✗ Ripresa a schermo spento: tempo fermo, iOS ha sospeso l'app (${how})`); return; }
+    if (el.readyState < 3) { log(`Ripresa a schermo spento: in attesa di dati (${how})`); return; }
+    log(`✗ A schermo spento iOS non ha fatto ripartire il suono (${how}): rimetto in pausa, così la schermata di blocco non conta a vuoto`);
+    actBy = 'nessun suono a schermo spento'; el.pause();
+  }, 3000);
+}
 let pendingSeek = 0, pendingAuto = null, announced = null, lastSave = 0, loadedFile = null;
 const retried = new Set();
 function curTrack() { return Q.pos >= 0 && Q.pos < Q.order.length ? LIB.tracks.get(Q.items[Q.order[Q.pos]]) || null : null; }
@@ -1990,6 +2042,7 @@ function bindAudio(el) {
   on('seeked', () => updatePosition());       // dopo uno spostamento iOS rimette la posizione del lettore (che nelle «fette» parte da 0)
   on('loadedmetadata', () => { tailCheck(); checkDuration(); if (startMeas && startMeas.metaMs == null && loadedFile === startMeas.file) startMeas.metaMs = performance.now() - startMeas.t0; applyPendingSeek(); updateProgress(); updatePosition(); });
   on('playing', () => {
+    if (KA.on) setTimeout(() => { if (!audio.paused) kaStop(); }, 1500);   // il silenzio si ferma quando la musica è ben partita (sessione sempre attiva)
     tailCheck(); setPP(); reassertMediaSession(); if (audio._approx) approxLog();
     if (RX.on) { applyRate(audio); if (RX.drums.on) { DS.next = null; DS.off = null; rxEnsureAnalysis(); if (rxOpen) refreshRx(); } }
     if (!curTrack()) return;
@@ -2008,7 +2061,8 @@ function bindAudio(el) {
     setPP(); saveResume(true); updatePosition();
     if (audio.getAttribute('src') && audio.readyState > 0 && !audio.ended && actBy !== 'fine della coda') {
       const det = actBy ? '' : ` · ${curBlob ? 'dalla memoria' : 'streaming'} a ${fmtTime(relTime())} · rete ${audio.networkState} · dati ${audio.readyState}${audio.error ? ' · errore ' + audio.error.code : ''}${ac ? ' · motore «' + ac.state + '»' : ''}${PRE ? ' · precarico ' + (PRE.ready ? 'pronto' : 'in corso') : ''}`;
-      log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}${det}`); pausedLogged = true;
+      const ka = actBy && actBy !== 'nessun suono a schermo spento' && kaStart();   // solo pause tue: il ▶ della schermata di blocco deve ripartire
+      log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}${det}${ka ? ' · sessione audio sveglia per 10 min' : ''}`); pausedLogged = true;
       sysPause = actBy ? 0 : Date.now();
     }
     actBy = null;
@@ -2115,8 +2169,13 @@ function restoreResumeIfNeeded() {
 function setupMediaSession() {
   if (!('mediaSession' in navigator)) return;
   const hd = (n, f) => { try { navigator.mediaSession.setActionHandler(n, f); } catch (e) {} };
-  hd('play', () => { actBy = 'schermata di blocco'; if (audio.paused) togglePlay(); });
-  hd('pause', () => { actBy = 'schermata di blocco'; audio.pause(); });
+  hd('play', () => { actBy = 'schermata di blocco'; if (audio.paused) { togglePlay(); if (isHidden()) lockPlayCheck(); } else actBy = null; });
+  // con la sessione tenuta sveglia iOS potrebbe credere che Basalto suoni e mandare «pausa» al posto di ▶: con la musica ferma vale come ▶
+  hd('pause', () => {
+    actBy = 'schermata di blocco';
+    if (!audio.paused) { audio.pause(); return; }
+    if (kaActive() && isHidden()) { log('Schermata di blocco: «pausa» con la musica già ferma, la prendo come ▶'); togglePlay(); lockPlayCheck(); } else actBy = null;
+  });
   hd('previoustrack', prev);
   hd('nexttrack', next);
   hd('seekto', d => { seekAbs(trackStart(curTrack()) + d.seekTime); updatePosition(); });
@@ -2403,7 +2462,10 @@ function rxChain() {
     } else { cur = pitchShifter(cur, p, N); RXN.toneLat = 0.05; }
   }
   if (RX.on && fx.filt.on) {
-    const f = N(ac.createBiquadFilter()); RXN.filt = f; rxFilterParams(); cur.connect(f); cur = f;
+    if (rxOldKind(fx.filt.type)) {                       // walkman / giradischi
+      const loop = b => { const x = ac.createBufferSource(); x.buffer = b; x.loop = true; x.start(); RXN.srcs.push(x); RXN.all.push(x); return x; };
+      const o = rxOldSound({ ctx: ac, N, lfo: (f, d, tg) => lfo(f, d, tg).g, loop }, cur, fx.filt.type, fx.filt.freq); RXN.oldm = o; cur = o.out;
+    } else { const f = N(ac.createBiquadFilter()); RXN.filt = f; rxFilterParams(); cur.connect(f); cur = f; }
   }
   if (RX.on && fx.dist.on) {
     const ws = N(ac.createWaveShaper()); ws.oversample = '4x'; RXN.ws = ws; const out = G(1); RXN.distOut = out; rxDistParams();
@@ -2464,7 +2526,82 @@ function rxToneStats(w, semi) {
 function rxFiltCfg(p) {
   return p.type === 'lp' ? { type: 'lowpass', freq: 150 * Math.pow(60, p.freq), Q: 1.2 } : p.type === 'hp' ? { type: 'highpass', freq: 150 * Math.pow(20, p.freq), Q: 0.9 } : { type: 'bandpass', freq: 500 * Math.pow(6, p.freq), Q: 2.2 };
 }
-function rxFilterParams() { const f = RXN.filt; if (!f) return; const c = rxFiltCfg(RX.fx.filt); f.type = c.type; f.frequency.value = c.freq; f.Q.value = c.Q; }
+function rxFilterParams() {
+  if (RXN.oldm) { RXN.oldm.setWear(RX.fx.filt.freq); return; }            // walkman / giradischi: il cursore è l'usura
+  const f = RXN.filt; if (!f) return; const c = rxFiltCfg(RX.fx.filt); f.type = c.type; f.frequency.value = c.freq; f.Q.value = c.Q;
+}
+/* --- Walkman e Giradischi (v1.43): simulazioni del suono di un nastro e di un disco, dal vivo e nel salvataggio ---
+   Stesso schema nei due casi; E dà il contesto audio e il modo di creare le oscillazioni lente e i rumori in giro
+   (dal vivo partono subito; nel salvataggio sono allineati al punto del brano, così i pezzi si uniscono senza giunture).
+   w = usura (0 = nuovo, 1 = consumato): acuti, fruscio, scricchiolii e ondulazione crescono con lei. */
+const rxOldKind = k => k === 'walk' || k === 'vinyl';
+const RXOLD = new Map();                     // rumori già pronti, per frequenza di campionamento
+function rxRand(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t ^= t + Math.imul(t ^ t >>> 7, 61 | t); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function rxOldBuf(ctx, kind, sr) {
+  const key = kind + sr; if (RXOLD.has(key)) return RXOLD.get(key);
+  const sec = kind === 'white' ? 4.37 : 9.37, n = Math.round(sr * sec);
+  let b; try { b = new AudioBuffer({ numberOfChannels: 2, length: n, sampleRate: sr }); } catch (e) { b = ctx.createBuffer(2, n, sr); }
+  const L = b.getChannelData(0), R = b.getChannelData(1), rnd = rxRand(kind === 'white' ? 11 : 29);
+  if (kind === 'white') for (let i = 0; i < n; i++) { L[i] = rnd() * 2 - 1; R[i] = rnd() * 2 - 1; }
+  else {
+    // superficie del disco: tanti piccoli «tic» (circa 35 al secondo per canale) e qualche schiocco più forte
+    const tick = (A, at, amp, len, sg) => { for (let i = 0; i < len && at + i < n; i++) A[at + i] += sg * amp * Math.exp(-4 * i / len) * (i ? 0.4 + 0.6 * (rnd() * 2 - 1) : 1); };
+    for (let t = 0; ; ) {
+      t += -Math.log(1 - rnd()) / 35; const at = Math.floor(t * sr); if (at >= n) break;
+      const amp = 0.02 + 0.13 * rnd() ** 3, len = Math.max(3, Math.round(sr * (0.0002 + 0.0006 * rnd()))), sg = rnd() < 0.5 ? -1 : 1, both = rnd() < 0.6, side = rnd() < 0.5;
+      if (both || side) tick(L, at, amp, len, sg); if (both || !side) tick(R, at, amp * (both ? 0.6 + 0.4 * rnd() : 1), len, sg);
+    }
+    for (let t = 0; ; ) {
+      t += -Math.log(1 - rnd()) / 0.6; const at = Math.floor(t * sr); if (at >= n) break;
+      const amp = 0.08 + 0.17 * rnd(), len = Math.round(sr * (0.001 + 0.002 * rnd())), sg = rnd() < 0.5 ? -1 : 1;
+      tick(L, at, amp, len, sg); tick(R, at, amp * (0.7 + 0.3 * rnd()), len, sg);
+    }
+  }
+  RXOLD.set(key, b); return b;
+}
+function rxTapeCurve() {                     // saturazione del nastro: lineare fino a 0,55, poi si piega dolcemente
+  const n = 2049, c = new Float32Array(n), t = 0.55;
+  for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1, a = Math.abs(x); c[i] = Math.sign(x) * (a < t ? a : t + (1 - t) * Math.tanh((a - t) / (1 - t))); }
+  return c;
+}
+function rxOldSound(E, cur, kind, w0) {
+  const c = E.ctx, sr = c.sampleRate, G = v => { const g = E.N(c.createGain()); g.gain.value = v; return g; };
+  const bq = (type, f, Q, gain) => { const b = E.N(c.createBiquadFilter()); b.type = type; b.frequency.value = f; b.Q.value = Q; if (gain != null) b.gain.value = gain; return b; };
+  const go = (...ns) => { for (const n of ns) { cur.connect(n); cur = n; } };
+  const noise = (k, ...ns) => { let x = E.loop(rxOldBuf(c, k, sr)); for (const n of ns) { x.connect(n); x = n; } return x; };
+  const st = G(1); st.channelCount = 2; st.channelCountMode = 'explicit'; st.channelInterpretation = 'speakers'; go(st);   // anche un mono diventa stereo
+  // velocità che oscilla: il suono passa da un ritardo che si allunga e si accorcia piano (wow) e veloce (flutter)
+  const dl = E.N(c.createDelay(0.05)); dl.delayTime.value = 0.005; go(dl);
+  const W = kind === 'walk' ? [[0.65, 0.0015, 0.005], [0.27, 0.0008, 0.0018], [7.5, 0.0004, 0.0009]]    // [Hz, scarto di velocità nuovo, in più se consumato]
+                            : [[0.5556, 0.0006, 0.0024], [3.9, 0.0002, 0.0004]];                         // 33 giri al minuto
+  const wow = W.map(([f]) => E.lfo(f, 0, dl.delayTime));
+  const sum = G(1), set = [];
+  if (kind === 'walk') {
+    // nastro: bassi sotto 45 Hz tagliati, «gobba» della testina sui 100 Hz, acuti che cadono da 11 kHz (nuovo) a 5,5 kHz
+    const lp1 = bq('lowpass', 11000, 0.7), lp2 = bq('lowpass', 13000, 0.5), pre = G(1), post = G(1), ws = E.N(c.createWaveShaper());
+    ws.curve = rxTapeCurve(); ws.oversample = '4x';
+    go(bq('highpass', 45, 0.7), bq('peaking', 100, 1, 1.5), lp1, lp2, pre, ws, post); cur.connect(sum);
+    const hl = bq('lowpass', 11000, 0.7), hiss = G(0); noise('white', bq('highpass', 1800, 0.7), hl, hiss).connect(sum);        // fruscio del nastro
+    set.push(w => { const f = 11000 * Math.pow(0.5, w); lp1.frequency.value = f; lp2.frequency.value = f * 1.2; hl.frequency.value = f;
+      const d = 1.15 + 0.85 * w; pre.gain.value = d; post.gain.value = 1 / d; hiss.gain.value = 0.0045 * Math.pow(10, 12 * w / 20); });
+  } else {
+    // disco: banda piena ma acuti che cadono da 16 kHz (nuovo) a 9 kHz; canali che si mescolano un poco (testina)
+    const lp1 = bq('lowpass', 16000, 0.7), lp2 = bq('lowpass', 19000, 0.5); go(bq('highpass', 22, 0.7), lp1, lp2, G(0.94));   // −0,5 dB: spazio per gli schiocchi
+    const sp = E.N(c.createChannelSplitter(2)), mg = E.N(c.createChannelMerger(2)), ll = G(1), rr = G(1), lr = G(0), rl = G(0);
+    cur.connect(sp); sp.connect(ll, 0); sp.connect(lr, 0); sp.connect(rr, 1); sp.connect(rl, 1);
+    ll.connect(mg, 0, 0); rl.connect(mg, 0, 0); rr.connect(mg, 0, 1); lr.connect(mg, 0, 1); mg.connect(sum);
+    const crk = G(0), rum = G(0), hiss = G(0);
+    noise('crackle', bq('highpass', 250, 0.7), crk).connect(sum);                        // fruscii e scricchiolii della superficie
+    noise('white', bq('lowpass', 40, 0.7), bq('lowpass', 40, 0.7), rum).connect(sum);    // rombo del piatto
+    noise('white', bq('highpass', 4000, 0.7), hiss).connect(sum);
+    set.push(w => { const f = 16000 * Math.pow(0.55, w), k = 0.06 + 0.12 * w; lp1.frequency.value = f; lp2.frequency.value = f * 1.2;
+      ll.gain.value = rr.gain.value = 1 - k; lr.gain.value = rl.gain.value = k;
+      crk.gain.value = 0.2 + 0.6 * w; rum.gain.value = 0.05 * Math.pow(10, 8 * w / 20); hiss.gain.value = 0.0012 * Math.pow(10, 10 * w / 20); });
+  }
+  const setWear = w => { W.forEach(([f, a, b], i) => { wow[i].gain.value = (a + b * w) / (2 * Math.PI * f); }); for (const f of set) f(w); };
+  setWear(w0);
+  return { out: sum, setWear };
+}
 function rxDistCfg(amt) {
   const k = amt * 60, n = 2048, c = new Float32Array(n);
   for (let i = 0; i < n; i++) { const x = i * 2 / n - 1; c[i] = (1 + k) * x / (1 + k * Math.abs(x)); }
@@ -3400,9 +3537,21 @@ function rxPanel() {
       h('div', { class: 'eqp' }, ...Object.keys(ECHODIV).map(d => rxChip(fx.echo.div === d, d, () => { fx.echo.div = d; custom(); rxEchoTime(); refreshRx(); }))),
       rxSlider('Ripetizioni', 0, 0.85, 0.01, fx.echo.fb, pct, x => { fx.echo.fb = x; custom(); if (RXN.echoFb) RXN.echoFb.gain.value = x; }),
       rxSlider('Quantità', 0, 1, 0.01, fx.echo.mix, pct, x => { fx.echo.mix = x; custom(); if (RXN.echoMix) RXN.echoMix.w.gain.value = x; })]),
-    rxFxRow('filt', 'Filtro', 'Suono «sott\'acqua», da radio o da telefono.', () => [
-      h('div', { class: 'eqp' }, ...[['lp', 'Sott\'acqua'], ['hp', 'Radio'], ['bp', 'Telefono']].map(([k, n]) => rxChip(fx.filt.type === k, n, () => { fx.filt.type = k; custom(); rxFilterParams(); refreshRx(); }))),
-      rxSlider('Frequenza', 0, 1, 0.01, fx.filt.freq, pct, x => { fx.filt.freq = x; custom(); rxFilterParams(); })]),
+    rxFxRow('filt', 'Filtro', 'Suono «sott\'acqua», da radio, da telefono, da walkman o da giradischi.', () => {
+      const old = rxOldKind(fx.filt.type);
+      return [
+        h('div', { class: 'eqp' }, ...[['lp', 'Sott\'acqua'], ['hp', 'Radio'], ['bp', 'Telefono'], ['walk', 'Walkman'], ['vinyl', 'Giradischi']].map(([k, n]) => rxChip(fx.filt.type === k, n, () => {
+          const was = fx.filt.type; if (was === k) return;
+          fx.filt.type = k; custom(); log('Remix: filtro ' + n.toLowerCase());
+          if (rxOldKind(k) || rxOldKind(was)) rxChain(); else rxFilterParams();      // walkman e giradischi hanno una catena loro
+          refreshRx();
+        }))),
+        rxSlider(old ? 'Usura' : 'Frequenza', 0, 1, 0.01, fx.filt.freq, pct, x => { fx.filt.freq = x; custom(); rxFilterParams(); }),
+        old ? h('p', { class: 'small mut' }, fx.filt.type === 'walk'
+          ? 'Cassetta in un walkman: acuti spenti, fruscio del nastro, saturazione morbida e la velocità che oscilla un poco. Più usura, più si sente.'
+          : 'Disco in vinile: fruscii e scricchiolii della superficie, rombo del piatto, acuti più morbidi, canali un po\' mescolati e la leggera ondulazione dei 33 giri. Più usura, più si sente.') : null,
+      ];
+    }),
     rxFxRow('dist', 'Distorsione', 'Suono saturo, da amplificatore spinto.', () => [
       rxSlider('Quantità', 0, 1, 0.01, fx.dist.amt, pct, x => { fx.dist.amt = x; custom(); rxDistParams(); })]),
     rxFxRow('flang', 'Flanger', 'L\'effetto «aereo» che sale e scende.', () => [
@@ -3891,7 +4040,7 @@ function rxsDesc(S) {
   if (S.preset && S.preset !== 'custom' && S.preset !== 'none' && RXPRE[S.preset]) p.push('preset «' + RXPRE[S.preset] + '»');
   if (Math.abs(S.rate - 1) > 0.001) p.push(`velocità ${S.rate.toFixed(2).replace('.', ',')}×${S.vinyl ? ' (anche il tono, come un disco)' : ''}`);
   if (S.semi) p.push(`tonalità ${S.semi > 0 ? '+' : '−'}${Math.abs(S.semi)} semitoni`);
-  for (const k of Object.keys(n)) if (fx[k] && fx[k].on) p.push(n[k]);
+  for (const k of Object.keys(n)) if (fx[k] && fx[k].on) p.push(k === 'filt' && rxOldKind(fx.filt.type) ? `suono da ${fx.filt.type === 'walk' ? 'walkman' : 'giradischi'} (usura ${Math.round(fx.filt.freq * 100)}%)` : n[k]);
   if (S.eq) p.push('equalizzatore');
   if (S.drums) p.push(`batteria ${S.drums.realOn ? 'vera' : 'sintetica'}${S.drums.groove ? ` «${S.drums.groove.nome}»` : ''}, basso`);
   return p.join(', ') || 'nessuna modifica';
@@ -3950,7 +4099,12 @@ function rxsFx(ctx, src, dst, S, t0) {
     BANDS.forEach((f, i) => { const b = ctx.createBiquadFilter(); b.type = i === 0 ? 'lowshelf' : i === BANDS.length - 1 ? 'highshelf' : 'peaking'; b.frequency.value = f; b.Q.value = 1.1; b.gain.value = S.eq[i] || 0; cur.connect(b); cur = b; });
   }
   const lfo = (buf, freq, depth, target) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.loopEnd = 1 / freq; const g = G(depth); s.connect(g); g.connect(target); s.start(0, (t0 * freq % 1) / freq); };
-  if (fx.filt && fx.filt.on) { const f = ctx.createBiquadFilter(), c = rxFiltCfg(fx.filt); f.type = c.type; f.frequency.value = c.freq; f.Q.value = c.Q; cur.connect(f); cur = f; }
+  if (fx.filt && fx.filt.on && rxOldKind(fx.filt.type)) {          // walkman / giradischi: oscillazioni e rumori allineati al punto del brano
+    const sines = S.sines || (S.sines = {});
+    const lfoAt = (f, d, tg) => { const b = sines[f] || (sines[f] = rxsSine(f, S.sr)), x = ctx.createBufferSource(), g = G(d); x.buffer = b; x.loop = true; x.loopEnd = 1 / f; x.connect(g); g.connect(tg); x.start(0, (t0 * f % 1) / f); return g; };
+    const loop = b => { const x = ctx.createBufferSource(); x.buffer = b; x.loop = true; x.start(0, t0 % b.duration); return x; };
+    cur = rxOldSound({ ctx, N: n => n, lfo: lfoAt, loop }, cur, fx.filt.type, fx.filt.freq).out;
+  } else if (fx.filt && fx.filt.on) { const f = ctx.createBiquadFilter(), c = rxFiltCfg(fx.filt); f.type = c.type; f.frequency.value = c.freq; f.Q.value = c.Q; cur.connect(f); cur = f; }
   if (fx.dist && fx.dist.on) { const ws = ctx.createWaveShaper(), d = rxDistCfg(fx.dist.amt), out = G(d.out); ws.oversample = '4x'; ws.curve = d.curve; cur.connect(ws); ws.connect(out); cur = out; }
   const mixUnit = (wetFrom, dry, wet) => { const out = G(1), d = G(dry), w = G(wet); cur.connect(d); d.connect(out); wetFrom.connect(w); w.connect(out); cur = out; };
   if (fx.flang && fx.flang.on) {
@@ -4250,7 +4404,11 @@ function autoResumeRow() {
   return swRow('Ripartenza automatica', 'Se iOS ferma la musica mentre è in sottofondo (microfono, Siri, chiamata), riparte da sola quando l\'interruzione finisce. Non riparte se l\'hai messa in pausa tu, se l\'interruzione dura più di 10 minuti o se in quel momento hai il lettore aperto. Senza motore audio funziona solo se Safari segnala la fine dell\'interruzione.',
     autoResumeOn(), on => { store(K.autoResume, on ? null : 'off'); log('Ripartenza automatica ' + (on ? 'attivata' : 'disattivata')); refreshEqUI(); });
 }
-function playbackPanel() { return h('div', { class: 'eq' }, h('h2', { style: 'margin:0' }, 'Riproduzione'), rgRow(), gapRow(), contRow(), preloadRow(), autoResumeRow()); }
+function lockWakeRow() {
+  return swRow('▶ dalla schermata di blocco dopo una pausa', 'Con Basalto sulla schermata Home, iOS dopo pochi secondi di pausa a schermo spento non lascia ripartire il suono dal ▶ della schermata di blocco: il contatore scorre ma non si sente niente. Per 10 minuti dopo una pausa decisa da te Basalto tiene sveglia la sessione audio facendo «suonare» silenzio (creato in memoria: niente rete, niente salvato). Non succede dopo una pausa decisa da iOS (chiamata, altra app, cuffie tolte). Se noti stranezze sulla schermata di blocco, spegnilo.',
+    lockWakeOn(), on => { store(K.lockWake, on ? null : 'off'); if (!on) kaStop(); log('Sessione audio sveglia in pausa ' + (on ? 'attivata' : 'disattivata')); refreshEqUI(); });
+}
+function playbackPanel() { return h('div', { class: 'eq' }, h('h2', { style: 'margin:0' }, 'Riproduzione'), rgRow(), gapRow(), contRow(), preloadRow(), autoResumeRow(), lockWakeRow()); }
 function refreshEqUI() {
   document.querySelectorAll('[data-eq-host]').forEach(host => { if (host.id !== 'eqBox' || eqOpen) host.replaceChildren(eqPanel()); });
   document.querySelectorAll('[data-play-host]').forEach(host => host.replaceChildren(playbackPanel()));
