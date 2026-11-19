@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.44';
+const VERSION = '1.45';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -1292,7 +1292,46 @@ function interruptionEnded(source) {
   if (!isHidden()) { log('Interruzione finita con il lettore aperto: la musica resta in pausa'); return; }
   if (age > AUTO_MAX) { log(`Interruzione di iOS durata ${Math.round(age / 60000)} min: la musica resta in pausa`); return; }
   log(`↻ Ripartenza automatica dopo l'interruzione di iOS (${Math.round(age / 1000)} s · ${source})`);
-  pausedLogged = false; actBy = 'ripartenza automatica'; doPlay();
+  pausedLogged = false; actBy = 'ripartenza automatica'; doPlay(); lockPlayCheck();
+}
+/* Sensore delle interruzioni (v1.45). Su iPhone Safari non dice alla pagina quando un'interruzione finisce (un vocale di
+   WhatsApp, una chiamata, Siri): la musica riparte da sola solo se l'altra app lo chiede a iOS, e spesso non lo fa.
+   Il motore audio invece cambia stato: «interrupted» all'inizio, «suspended» o «running» alla fine (WebKit,
+   AudioContext::mayResumePlayback). Senza motore audio uso un contesto audio vuoto, acceso solo mentre la musica suona:
+   non è collegato all'uscita (non produce suono, non compare sulla schermata di blocco, la musica non ci passa) e serve
+   solo a sapere quando l'interruzione inizia e finisce. Così si distingue anche una pausa di iOS senza interruzione
+   (cuffie o auto scollegate): lì la musica resta in pausa. */
+const SEN = { ctx: null, seen: 0 };
+const senState = () => (ac || SEN.ctx) ? (ac || SEN.ctx).state : null;
+function senStart() {
+  if (ac || !autoResumeOn()) { senStop(); return; }          // con il motore audio l'avviso arriva già da lui
+  try {
+    if (!SEN.ctx) {
+      const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+      const ctx = SEN.ctx = new C({ latencyHint: 'playback' }); let prev = ctx.state;
+      ctx.onstatechange = () => {
+        if (ctx !== SEN.ctx) return;
+        const st = ctx.state;
+        if (st === 'interrupted') { SEN.seen = Date.now(); log('Interruzione di iOS iniziata (altra app, chiamata o Siri)'); }
+        if (prev === 'interrupted' && st !== 'interrupted' && st !== 'closed') { log(`Interruzione di iOS finita${st === 'running' ? ' (iOS chiede di riprendere)' : ''}`); interruptionEnded('sensore'); }
+        prev = st;
+      };
+      if (!SEN.logged) { SEN.logged = true; log('Sensore delle interruzioni acceso (per la ripartenza automatica)'); }
+    }
+    if (SEN.ctx.state === 'suspended') SEN.ctx.resume().catch(() => {});
+  } catch (e) { SEN.ctx = null; }
+}
+function senPause() { if (SEN.ctx && SEN.ctx.state === 'running') SEN.ctx.suspend().catch(() => {}); }
+function senStop() { if (SEN.ctx) { const c = SEN.ctx; SEN.ctx = null; c.onstatechange = null; c.close().catch(() => {}); } }
+// pausa decisa da iOS: se nel frattempo il sensore non ha visto un'interruzione è un'altra cosa (cuffie, auto, AirPlay)
+function sysPauseCheck(t) {
+  setTimeout(() => {
+    if (sysPause !== t || !audio.paused) return;
+    const st = senState(); if (st == null) return;           // nessun sensore: decide l'eventuale avviso di Safari
+    if (st === 'interrupted' || Date.now() - SEN.seen < 3000) return;
+    sysPause = 0; senPause();
+    log('Pausa di iOS senza interruzione (cuffie, auto o AirPlay scollegati?): la musica resta in pausa');
+  }, 1500);
 }
 function watchAudioSession() {      // dove Safari lo permette, la sessione audio avvisa anche senza equalizzatore
   const as = navigator.audioSession;
@@ -1806,7 +1845,7 @@ function gapMeasure(g) {
   log(d >= 0 ? `   ↳ pausa tra i brani: ${d} ms` : `   ↳ nessuna pausa (sovrapposizione di ${-d} ms)`);
 }
 function doPlay() {
-  eqWake(); audio.muted = false;
+  eqWake(); audio.muted = false; senStart();
   if (!spareUnlocked) { spareUnlocked = true; try { spare.load(); } catch (e) {} }   // primo gesto: iOS permette poi al lettore di riserva di caricare
   const el = audio, src0 = el.getAttribute('src'), p = el.play();
   if (p && p.catch) p.catch(e => { if (e.name === 'AbortError' && (el !== audio || el.getAttribute('src') !== src0)) return;   // interrotto da un nuovo caricamento: normale
@@ -2073,11 +2112,12 @@ function bindAudio(el) {
       const ka = actBy && actBy !== 'nessun suono a schermo spento' && kaStart();   // solo pause tue: il ▶ della schermata di blocco deve ripartire
       log(`⏸ Pausa · ${actBy || 'decisa da iOS'}${isHidden() ? ' · schermo spento' : ''}${det}${ka ? ' · sessione audio sveglia per 10 min' : ''}`); pausedLogged = true;
       sysPause = actBy ? 0 : Date.now();
+      if (sysPause) sysPauseCheck(sysPause); else senPause();
     }
     actBy = null;
   });
   on('play', () => {
-    sysPause = 0;
+    sysPause = 0; senStart();
     if (pausedLogged) { log(`▶ Riprende · ${actBy || 'iOS'}${isHidden() ? ' · schermo spento' : ''}`); pausedLogged = false; }
     actBy = null;
   });
@@ -2106,7 +2146,7 @@ function bindAudio(el) {
     log(`■ Fine brano «${t ? trackInfo(t).title : '?'}»${isHidden() ? ' · schermo spento' : ''}${gd && Math.abs(at - gd) > 0.3 ? ` · finito a ${fmtExact(at)} (durata del file ${fmtExact(gd)})` : ''}`);
     if (Q.repeat === 'one') { log('↻ Ripeto il brano (ripetizione di un brano attiva)'); seekAbs(trackStart(t)); doPlay(); return; }
     const n = nextIndex();
-    if (n < 0) { log('Fine della coda'); setPP(); saveResume(true); return; }
+    if (n < 0) { log('Fine della coda'); setPP(); saveResume(true); senPause(); return; }
     if (isHidden()) pendingAuto = Date.now();
     autoNext = true; try { loadAndPlay(n); } finally { autoNext = false; }
   });
@@ -2253,6 +2293,7 @@ function attachEl(el) {
 }
 function ensureGraph() {
   if (ac) return true;
+  senStop();                                  // il motore audio fa anche da sensore delle interruzioni
   audioSessionType('playback');
   log('Sessione audio: ' + (navigator.audioSession ? navigator.audioSession.type : 'non disponibile in questo browser'));
   const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
@@ -2262,8 +2303,8 @@ function ensureGraph() {
     eqFilters = BANDS.map((f, i) => { const b = ac.createBiquadFilter(); b.type = i === 0 ? 'lowshelf' : i === BANDS.length - 1 ? 'highshelf' : 'peaking'; b.frequency.value = f; b.Q.value = 1.1; b.gain.value = 0; return b; });
     for (let i = 0; i < eqFilters.length - 1; i++) eqFilters[i].connect(eqFilters[i + 1]);
     fxIn = ac.createGain(); fxMaster = ac.createGain(); fxMaster.connect(ac.destination);          // dopo l'equalizzatore: effetti del remix
-    drumBus = ac.createGain(); drumBus.gain.value = RX.drums.vol; drumBus.connect(fxMaster);
-    bassBus = ac.createGain(); bassBus.gain.value = RX.drums.bassVol; bassBus.connect(fxMaster);
+    drumBus = ac.createGain(); drumBus.gain.value = RX.drums.vol * rxHR(); drumBus.connect(fxMaster);
+    bassBus = ac.createGain(); bassBus.gain.value = RX.drums.bassVol * rxHR(); bassBus.connect(fxMaster);
     eqFilters[eqFilters.length - 1].connect(fxIn);
     eqWired = null; wireEq(); rxChain(); rxToneLoad();
     for (const el of [audio, spare]) attachEl(el);
@@ -2272,7 +2313,8 @@ function ensureGraph() {
     ctx.onstatechange = () => {
       log(`Motore audio «${ctx.state}»`);
       if (ctx === ac && ctx.state !== 'running' && ctx.state !== 'closed' && !audio.paused) ctx.resume().catch(() => {});
-      if (ctx === ac && prevState === 'interrupted' && ctx.state === 'running') interruptionEnded('motore audio');
+      if (ctx === ac && ctx.state === 'interrupted') SEN.seen = Date.now();
+      if (ctx === ac && prevState === 'interrupted' && (ctx.state === 'running' || ctx.state === 'suspended')) interruptionEnded('motore audio');
       prevState = ctx.state;
     };
     return true;
@@ -2454,8 +2496,9 @@ function rxChain() {
   const head = G(1); RXN.head = head; fxIn.connect(head);
   let cur = head;
   const fx = RX.fx;
-  RXN.toneLat = 0;
+  RXN.toneLat = 0; rxBusGains();
   if (RX.on && RX.semi) {
+    { const hr = G(TONE_HR); cur.connect(hr); cur = hr; }    // 3 dB di spazio per i picchi (vedi TONE_HR)
     // tonalità: modulo rx-tono.js (vocoder di fase + ricampionamento, tono esatto, ritardo fisso e noto).
     // Mentre il modulo arriva (pochi decimi di secondo) un attimo di silenzio; il vecchio spostamento a «grani»
     // (tono approssimato, ronzio) solo se il modulo non si può usare
@@ -2524,11 +2567,18 @@ function rxSwap(old, t0) {
   if (!og) kill(); else setTimeout(kill, (off - t0 + F) * 1000 + 150);
 }
 // il modulo della tonalità manda ogni tanto i suoi numeri: quanto pesa il calcolo, buchi, picchi abbassati
+/* Tonalità spostata (v1.45): ricalcolando l'onda alcuni picchi salgono di 1-4 dB. Sui brani incisi al massimo il limitatore
+   li schiacciava per metà del tempo (registro della v1.43: fino a 3,8 dB). Ora, solo con la tonalità diversa da «Originale»,
+   tutto il remix (brano, effetti, batteria e basso, che restano in equilibrio) suona 3 dB più piano: i picchi ci stanno senza
+   essere toccati e il limitatore resta solo come sicurezza. Nell'ascolto normale e a tonalità originale non cambia niente. */
+const TONE_HR = Math.pow(10, -3 / 20);
+const rxHR = () => RX.on && RX.semi ? TONE_HR : 1;
+function rxBusGains() { if (drumBus) { drumBus.gain.value = RX.drums.vol * rxHR(); bassBus.gain.value = RX.drums.bassVol * rxHR(); } }
 function rxToneStats(w, semi) {
   const st = (semi > 0 ? '+' : '−') + Math.abs(semi), n1 = x => x.toFixed(1).replace('.', ',');
   w.port.onmessage = e => {
     const d = e.data; if (!d || d.t !== 'stat' || RXN.tono !== w) return;
-    const lim = d.minG < 0.9999 ? `picchi abbassati al massimo di ${n1(-20 * Math.log10(d.minG))} dB${d.lim ? ` (oltre 0,5 dB per ${Math.max(1, Math.round(d.lim / d.sr * 1000))} ms)` : ''}` : 'nessun picco da abbassare';
+    const lim = 'volume −3 dB · ' + (d.minG < 0.9999 ? `picchi abbassati al massimo di ${n1(-20 * Math.log10(d.minG))} dB${d.lim ? ` (oltre 0,5 dB per ${Math.max(1, Math.round(d.lim / d.sr * 1000))} ms)` : ''}` : 'nessun picco da abbassare');
     log(`Tonalità ${st}: calcolo ${Math.round(d.load * 100)}% del tempo disponibile${d.hr ? ` · chiamata più lenta ${n1(d.maxMs)} ms su ${n1(d.quantMs)}` : ''} · ${d.under ? d.under + ' campioni mancanti' : 'nessun buco'} · ${lim}${d.live > 1 ? ` · moduli accesi ${d.live}` : ''} (ultimi ${Math.round(d.sec)} s)`);
   };
 }
@@ -3470,7 +3520,7 @@ function rxSync() {
   if (!syncEngine()) { if (rxNeedsEngine()) toast('Remix non disponibile in questo browser'); }
   if (ac) {
     rxChain();
-    if (drumBus) { drumBus.gain.value = RX.drums.vol; bassBus.gain.value = RX.drums.bassVol; }
+    rxBusGains();
     if (RX.on && RX.drums.on) {
       rxListen(); if (RX.drums.groove && !RXK.grooves) rxLoad('grooves').then(() => { DS.next = null; refreshRx(); }).catch(() => {});
       rxKit().then(() => { rxEnsureAnalysis(); rxDrumLoop(); if (RX.drums.sound === 'real' && RXK.ctx !== ac) rxLoad('kit').then(() => refreshRx()).catch(() => {}); }).catch(e => log('Batteria non disponibile: ' + e.message));
@@ -3629,8 +3679,8 @@ function rxPanel() {
         }
       }
       wrap.append(grid,
-        rxSlider('Batteria', 0, 1.5, 0.01, RX.drums.vol, pct, x => { RX.drums.vol = x; if (drumBus) drumBus.gain.value = x; }, rxSaveDrums),
-        rxSlider('Basso', 0, 1.5, 0.01, RX.drums.bassVol, pct, x => { RX.drums.bassVol = x; if (bassBus) bassBus.gain.value = x; }, rxSaveDrums),
+        rxSlider('Batteria', 0, 1.5, 0.01, RX.drums.vol, pct, x => { RX.drums.vol = x; rxBusGains(); }, rxSaveDrums),
+        rxSlider('Basso', 0, 1.5, 0.01, RX.drums.bassVol, pct, x => { RX.drums.bassVol = x; rxBusGains(); }, rxSaveDrums),
         h('p', { class: 'small mut' }, 'Se la batteria va al doppio o a metà: «× 2» o «÷ 2». Se segue un altro ritmo: prova i tempi proposti o «Tocca a tempo» quattro volte sul ritmo. «Sposta la battuta» se la cassa non cade sul primo battito. «Terzinato» per i brani in shuffle o in 12/8 (ogni battito diviso in tre): l\'analisi lo riconosce da sola, ma puoi cambiarlo. Il basso segue gli accordi del brano (solo la nota principale), accordato come il brano. «Dal brano» si adatta da solo alla canzone; gli altri ritmi sono fissi.'),
         (RX.drums.sound === 'real' || gr) ? h('p', { class: 'small mut' }, [RX.drums.sound === 'real' && RXK.kit ? `Suoni: ${RXK.kit.nome}, ${RXK.kit.autore} (${RXK.kit.licenza}).` : '', gr && RXK.grooves ? 'Ritmi: Groove MIDI Dataset, Google Magenta (CC BY 4.0).' : ''].filter(Boolean).join(' ')) : '');
     }
@@ -4133,7 +4183,7 @@ async function rxsRender(S, inp, c0, len, hits) {
   const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext, oc = new OAC(2, len, S.sr);
   const buf = oc.createBuffer(inp.length, inp[0].length, S.sr); inp.forEach((a, c) => buf.getChannelData(c).set(a));
   const src = oc.createBufferSource(); src.buffer = buf;
-  const master = oc.createGain(); master.connect(oc.destination);
+  const master = oc.createGain(); master.gain.value = S.semi ? TONE_HR : 1; master.connect(oc.destination);   // tonalità spostata: 3 dB di spazio per i picchi
   rxsFx(oc, src, master, S, c0 / S.sr);
   if (S.drums) {
     const D = S.drums, drum = oc.createGain(), bass = oc.createGain(); drum.gain.value = D.vol; bass.gain.value = D.bassVol; drum.connect(master); bass.connect(master);
@@ -4410,7 +4460,7 @@ function preloadRow() {
     preloadOn(), on => { store(K.preload, on ? null : 'off'); if (!on) dropPre(); log('Precarico ' + (on ? 'attivato' : 'disattivato')); refreshEqUI(); });
 }
 function autoResumeRow() {
-  return swRow('Ripartenza automatica', 'Se iOS ferma la musica mentre è in sottofondo (microfono, Siri, chiamata), riparte da sola quando l\'interruzione finisce. Non riparte se l\'hai messa in pausa tu, se l\'interruzione dura più di 10 minuti o se in quel momento hai il lettore aperto. Senza motore audio funziona solo se Safari segnala la fine dell\'interruzione.',
+  return swRow('Ripartenza automatica', 'Se iOS ferma la musica mentre è in sottofondo (vocale di WhatsApp, chiamata, Siri), riparte da sola quando l\'interruzione finisce. Non riparte se l\'hai messa in pausa tu, se hai scollegato cuffie o auto, se l\'interruzione dura più di 10 minuti o se in quel momento hai il lettore aperto.',
     autoResumeOn(), on => { store(K.autoResume, on ? null : 'off'); log('Ripartenza automatica ' + (on ? 'attivata' : 'disattivata')); refreshEqUI(); });
 }
 function lockWakeRow() {
