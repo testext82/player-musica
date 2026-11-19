@@ -326,7 +326,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.43';
+const VERSION = '1.44';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -1646,7 +1646,15 @@ function finishCurrent(t, raw, t0) {
   const sec = (performance.now() - t0) / 1000; if (sec > 0.5) dlRate = raw.size / sec;
   log(`⬇ In memoria anche «${trackInfo(t).title}» (spostamenti precisi) · ${mb(raw.size)} in ${sec.toFixed(1)} s`);
   if (seekWait) { const w = seekWait; seekWait = null; if (canPrecise()) preciseSeek(w.x); else safariSeek(w.x); }
+  else fixApprox('ora che il brano è in memoria');
   maybePreload(); if (RX.on && RX.drums.on) rxEnsureAnalysis();
+}
+// dopo uno spostamento in streaming Safari indica il punto chiesto ma può suonare da un altro (anche di decine di secondi):
+// appena il brano è in memoria porto il suono sul punto indicato, così contatore, schermata di blocco e batteria tornano giusti
+function fixApprox(why) {
+  if (!audio._approx || seekWait || !canPrecise()) return;
+  log(`Posizione resa esatta ${why} (era stimata da Safari)`);
+  preciseSeek(absNow(), !audio.paused);
 }
 function curFailed(e) {
   if (e && e.name === 'AbortError') return;
@@ -1800,8 +1808,9 @@ function gapMeasure(g) {
 function doPlay() {
   eqWake(); audio.muted = false;
   if (!spareUnlocked) { spareUnlocked = true; try { spare.load(); } catch (e) {} }   // primo gesto: iOS permette poi al lettore di riserva di caricare
-  const p = audio.play();
-  if (p && p.catch) p.catch(e => { log(`play() rifiutato: ${e.name}`); if (e.name === 'NotAllowedError' && !isHidden()) toast('Tocca ▶ per avviare'); setPP(); });
+  const el = audio, src0 = el.getAttribute('src'), p = el.play();
+  if (p && p.catch) p.catch(e => { if (e.name === 'AbortError' && (el !== audio || el.getAttribute('src') !== src0)) return;   // interrotto da un nuovo caricamento: normale
+    log(`play() rifiutato: ${e.name}`); if (e.name === 'NotAllowedError' && !isHidden()) toast('Tocca ▶ per avviare'); setPP(); });
 }
 function playQueue(items, startIdx, shuffle = Q.shuffle) {
   if (!items.length) return;
@@ -2130,7 +2139,7 @@ document.addEventListener('visibilitychange', () => {
   }
   if (isHidden()) { lastBeat = Date.now(); saveResume(true); if (ac) log(`Schermo spento con equalizzatore: motore audio «${ac.state}», ${music()}`); }
   else if (ac) { log(`Schermo acceso: motore audio «${ac.state}», ${music()}`); if (!audio.paused) eqWake(); }
-  if (!isHidden()) prepareSpare();     // riacceso lo schermo, preparo subito il successivo
+  if (!isHidden()) { prepareSpare(); fixApprox('allo schermo riacceso'); }     // riacceso lo schermo, preparo subito il successivo
   if (!isHidden() && linked() && Date.now() - udLastSync > 60000) syncUD();     // modifiche fatte su un altro dispositivo
   if (!isHidden()) checkUpdate();                                              // l'app tornata in primo piano: c'è una versione nuova?
   if (isHidden() && udDirty && canWrite()) syncUD();
@@ -2297,7 +2306,7 @@ for (const ev of ['touchend', 'pointerup', 'click', 'keyup']) document.addEventL
 function dropEqEngine(keepPlaying) {
   if (!ac) return;
   gapCancel('motore audio spento');
-  const old = audio, src = old.getAttribute('src'), at = (old.currentTime || 0) + (old._off || 0), tail = { t: old._tail, o: old._off || 0, a: old._approx };
+  const old = audio, src = old.getAttribute('src'), at = absNow(), tail = { t: old._tail, o: old._off || 0, a: old._approx };   // absNow: anche se il lettore non ha ancora raggiunto il punto voluto (brano ancora in caricamento)
   const wasPlaying = keepPlaying != null ? keepPlaying : !old.paused;
   const el = document.createElement('audio'); el.id = 'audio'; el.preload = 'auto'; el.setAttribute('x-webkit-airplay', 'allow');
   audio = el; bindAudio(el);
