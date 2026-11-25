@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <!-- La pagina comunica solo con Dropbox; con MusicBrainz soltanto quando chiedi «Album che non hai» (riceve il nome dell'artista) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org https://it.wikipedia.org https://en.wikipedia.org https://www.wikidata.org https://upload.wikimedia.org; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Basalto">
@@ -116,6 +116,11 @@ input[type=range].scrub{-webkit-appearance:none;appearance:none;width:100%;heigh
 .box{background:var(--surf);border-radius:12px;padding:16px;margin-top:14px}
 .box h2{font-size:15px;margin:0 0 6px}
 .box p{margin:6px 0;color:var(--mut);font-size:14px;line-height:1.5}
+.sk .skp{color:var(--fg);font-size:15px;line-height:1.6;margin:8px 0}
+.sk h3{font-size:17px;margin:18px 0 4px}.sk h4{font-size:15px;margin:14px 0 2px;color:var(--mut)}
+.sk .skph{display:block;width:100%;max-height:320px;object-fit:cover;object-position:50% 25%;border-radius:8px;margin-bottom:12px}
+.sk .sked{width:100%;min-height:45vh;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;font-size:15px;line-height:1.5}
+.sk .sked1{width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;font-size:15px}
 .btn{height:44px;padding:0 18px;border-radius:22px;background:var(--inv);color:var(--invfg);font-weight:700;font-size:15px}
 .btn.sec{background:transparent;color:var(--fg);border:1px solid var(--line)}
 .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
@@ -326,19 +331,19 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.46';
+const VERSION = '1.47';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
 const CONTENT = 'https://content.dropboxapi.com/2/';
 const SCOPES = 'files.metadata.read files.content.read';
-const WRITE_SCOPE = 'files.content.write';      // solo per /_player/dati.json (preferiti e playlist), /_batteria/ e /Remix/ (Remix)
+const WRITE_SCOPE = 'files.content.write';      // solo per /_player/dati.json (preferiti e playlist), /_player/schede/ (bio e dischi), /_batteria/ e /Remix/ (Remix)
 const REDIRECT_URI = location.origin + location.pathname;
 const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviamo molto prima
 const K = { updSkip: 'mx_upd_skip', user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
             index: 'mx_index_v3', tags: 'mx_tags_v1', ameta: 'mx_ameta_v2', libView: 'mx_libview', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', lockWake: 'mx_lockwake', preload: 'mx_preload',
             rg: 'mx_rg_v1', gap: 'mx_gap', gapBg: 'mx_gap_bg', gapLead: 'mx_gap_lead', statsP: 'mx_stats_p', pseek: 'mx_pseek',
-            mb: 'mx_mb_v1', mbKind: 'mx_mb_kind', cont: 'mx_cont', theme: 'mx_theme', rhythm: 'mx_rhythm_v1', rxLag: 'mx_rx_lag', rxDrums: 'mx_rx_drums' };
+            mb: 'mx_mb_v1', mbKind: 'mx_mb_kind', cont: 'mx_cont', sk: 'mx_sk', theme: 'mx_theme', rhythm: 'mx_rhythm_v1', rxLag: 'mx_rx_lag', rxDrums: 'mx_rx_drums' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
 
 /* ---------------- riconoscimento della libreria (funzioni pure) ---------------- */
@@ -1895,6 +1900,20 @@ function playQueue(items, startIdx, shuffle = Q.shuffle) {
    I file sono identici agli originali; nulla viene salvato e la memoria si libera al cambio di brano.
    Si scarica il file intero: un pezzo iniziale non sarebbe utilizzabile, il lettore non può unirlo allo streaming. */
 let PRE_DELAY = 5000;                   // lascio partire lo streaming prima di dividere la rete
+/* v1.47 · avvio con rete debole. Nei registri del 17/11 alcuni brani in streaming partivano dopo 7-9 s («metadati 7,4 s»):
+   nello stesso momento Basalto scaricava in memoria il brano intero (e a volte il precarico di un altro), dividendo la rete.
+   Ora all'avvio in streaming la rete è tutta per Safari: il download in memoria comincia 1,5 s dopo che la musica è
+   partita, i precarichi di altri brani ancora lontani dalla fine si fermano (ripartono dopo), e se il precarico di
+   questo brano sta per finire (meno di 1,5 s) lo aspetto e parto dalla memoria. */
+const START_FREE = 1500;
+let everPlayed = false, lpTok = 0, preWaitSkip = null, fcWanted = null;   // fcWanted: brano partito a schermo acceso da scaricare in memoria appena la musica va (anche se poi spegni lo schermo)
+function preEta(p) {
+  if (!p || p.ready) return 0;
+  const sec = (performance.now() - p.t0) / 1000;
+  if (!p.size || p.got < 262144 || sec < 0.3) return Infinity;
+  return (p.size - p.got) / (p.got / sec);
+}
+function waitPre(p, ms) { return new Promise(res => { const tm = setTimeout(() => { p.onready = null; res(false); }, ms); p.onready = () => { clearTimeout(tm); p.onready = null; res(!!p.ready); }; }); }
 let srcPlayingAt = 0;                   // quando il file attuale ha iniziato a suonare
 const PRE_MAX = 150 * 1024 * 1024;      // oltre questa dimensione resta lo streaming
 const MIME = { flac: 'audio/flac', mp3: 'audio/mpeg', m4a: 'audio/mp4', alac: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', aif: 'audio/aiff', aiff: 'audio/aiff', ogg: 'audio/ogg', opus: 'audio/ogg', caf: 'audio/x-caf' };
@@ -1929,6 +1948,7 @@ function maybePreload() {
 }
 function maybeFetchCurrent() {          // brano in corso in streaming: lo scarico in memoria (a schermo acceso)
   const t = curTrack(); if (!t || curBlob || CURDL || isHidden() || !preloadOn() || loadedFile !== fileOf(t)) return;
+  if (!srcPlayingAt || Date.now() - srcPlayingAt < START_FREE) return;     // v1.47: prima lascio partire lo streaming da solo
   if (PRE && !PRE.ready) return;
   fetchCurrent(t);
 }
@@ -1967,10 +1987,11 @@ async function startPreload(nt, nf, kind, album) {
     if (PRE !== p) return;
     p.blob = new Blob([raw], { type: MIME[nt.ext] || 'application/octet-stream' });
     p.url = URL.createObjectURL(p.blob);
-    p.ready = true; p.ctrl = null;
+    p.ready = true; p.ctrl = null; if (p.onready) p.onready();
     const sec = (performance.now() - p.t0) / 1000; if (sec > 0.5) dlRate = raw.size / sec;
     log(`⬇ Precaricato «${trackInfo(nt).title}»${kind === 'album' ? ' (primo brano dell\'album)' : ''} · ${mb(raw.size)} in ${sec.toFixed(1)} s (${(raw.size / 1048576 / sec).toFixed(1)} MB/s)`);
   } catch (e) {
+    if (p.onready) p.onready();
     if (p.adoptFail) { p.adoptFail(e); return; }
     if (PRE === p) { PRE = null; if (e.name !== 'AbortError') { log('Precarico non riuscito: ' + e.message); noPre.add(nf); } }
   }
@@ -2005,7 +2026,7 @@ function measureStarted(t) {
     flacHeaderSize(m.file).then(hb => { if (hb >= 524288) log(`   ↳ prima dell'audio il file ha ${mb(hb)} di intestazione (copertina incorporata): rallenta la partenza`); }).catch(() => {});
 }
 function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
-  gapCancel(); pseekTok++; seekWait = null;
+  gapCancel(); pseekTok++; seekWait = null; const myTok = ++lpTok;
   Q.pos = pos; const t = curTrack(); if (!t) return;
   if (CURDL && CURDL.file !== fileOf(t)) dropCurDl();
   announced = null;
@@ -2030,17 +2051,32 @@ function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
     const spareOk = autoplay && !autoNext && !isHidden() && !airOn() && SP.file === f && spare.getAttribute('src') && !spare.error && !(pre && pre.ready);
     if (spareOk) {                                     // lettore di riserva già pronto: parte subito
       if (pre && !pre.ready && !isHidden() && t.ext === 'flac' && pseekOn()) adoptPre(pre, t); else if (pre) dropPre();
-      swapToSpare(f, target, autoplay);
-      if (!CURDL && !isHidden()) fetchCurrent(t);
+      if (autoplay && PRE && PRE.file !== f && !PRE.ready && preEta(PRE) > 3) { log(`Avvio: fermo il precarico di un altro brano, la rete serve allo streaming`); dropPre(); }
+      if (autoplay && !CURDL && !isHidden()) fcWanted = f;
+      swapToSpare(f, target, autoplay);           // il download in memoria parte da solo 1,5 s dopo la musica (maybeFetchCurrent)
     } else if (pre && pre.ready && !noPre.has(f)) {          // dalla memoria: niente rete
-      PRE = null; if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'memoria' };
+      PRE = null; if (autoplay) startMeas = { file: f, t0: startMeas && startMeas.file === f && startMeas.waited ? startMeas.t0 : performance.now(), from: 'memoria' };
       go(pre.url, { file: f, url: pre.url, blob: pre.blob });
     } else if (force && curBlob && curBlob.file === f && curBlob.blob && !noPre.has(f)) {   // ricarico lo stesso brano già in memoria (equalizzatore, errore…)
       if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'memoria' };
       go(curBlob.url, curBlob);
     } else {
-      if (pre) { if (autoplay) log(`Precarico non ancora finito: parto in streaming`); if (!pre.ready && !isHidden() && t.ext === 'flac' && pseekOn()) adoptPre(pre, t); else dropPre(); }
-      if (!CURDL && !isHidden() && autoplay) setTimeout(() => { if (curTrack() === t && !curBlob) fetchCurrent(t); }, 0);
+      const eta = pre ? preEta(pre) : Infinity;
+      if (pre && autoplay && !force && everPlayed && !isHidden() && eta < 1.5 && preWaitSkip !== f) {   // precarico quasi finito: lo aspetto
+        log(`Avvio: il precarico finisce tra ${eta.toFixed(1)} s, lo aspetto e parto dalla memoria`);
+        if (!audio.paused) { actBy = 'cambio brano'; audio.pause(); }
+        startMeas = { file: f, t0: performance.now(), from: 'memoria', waited: true };      // il tempo di attesa conta nella partenza
+        waitPre(pre, eta * 1500 + 1000).then(ok => { if (lpTok !== myTok || curTrack() !== t) return; if (!ok) preWaitSkip = f; loadAndPlay(Q.pos, startAt, autoplay, force); });
+        updateNowPlaying(); saveResume(true); return;
+      }
+      preWaitSkip = null;
+      if (pre) {
+        if (autoplay) log(`Precarico non ancora finito (${mb(pre.got)} su ${mb(pre.size)}): parto in streaming`);
+        // già avanti: lo lascio finire (diventa la copia in memoria); appena cominciato: lo fermo, la rete serve allo streaming
+        if (!pre.ready && !isHidden() && t.ext === 'flac' && pseekOn() && pre.size && pre.got / pre.size >= 0.3) adoptPre(pre, t); else dropPre();
+      }
+      if (autoplay && PRE && PRE.file !== f && !PRE.ready && preEta(PRE) > 3) { log(`Avvio: fermo il precarico di un altro brano, la rete serve allo streaming`); dropPre(); }
+      if (autoplay && !CURDL && !isHidden()) fcWanted = f;
       const link = freshLink(f);
       if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'streaming', link: link ? 'pronto' : 'nuovo' };
       if (link) go(link);    // percorso sincrono: indispensabile per iOS a schermo spento
@@ -2124,7 +2160,9 @@ function bindAudio(el) {
     tailCheck(); setPP(); reassertMediaSession(); if (audio._approx) approxLog();
     if (RX.on) { applyRate(audio); if (RX.drums.on) { DS.next = null; DS.off = null; rxEnsureAnalysis(); if (rxOpen) refreshRx(); } }
     if (!curTrack()) return;
-    if (!srcPlayingAt) srcPlayingAt = Date.now();
+    if (!srcPlayingAt) srcPlayingAt = Date.now(); everPlayed = true;
+    if (fcWanted && fcWanted === loadedFile) { const f = fcWanted; fcWanted = null;
+      setTimeout(() => { const t = curTrack(); if (t && fileOf(t) === f && loadedFile === f && !CURDL && !(curBlob && curBlob.file === f) && !(PRE && PRE.file === f)) fetchCurrent(t); }, START_FREE); }
     measureStarted(curTrack());
     if (pendingAuto) {
       const dt = ((Date.now() - pendingAuto) / 1000).toFixed(1);
@@ -4500,7 +4538,7 @@ function lockWakeRow() {
   return swRow('▶ dalla schermata di blocco dopo una pausa', 'Con Basalto sulla schermata Home, iOS dopo pochi secondi di pausa a schermo spento non lascia ripartire il suono dal ▶ della schermata di blocco: il contatore scorre ma non si sente niente. Per 10 minuti dopo una pausa decisa da te Basalto tiene sveglia la sessione audio facendo «suonare» silenzio (creato in memoria: niente rete, niente salvato). Non succede dopo una pausa decisa da iOS (chiamata, altra app, cuffie tolte). Se noti stranezze sulla schermata di blocco, spegnilo.',
     lockWakeOn(), on => { store(K.lockWake, on ? null : 'off'); if (!on) kaStop(); log('Sessione audio sveglia in pausa ' + (on ? 'attivata' : 'disattivata')); refreshEqUI(); });
 }
-function playbackPanel() { return h('div', { class: 'eq' }, h('h2', { style: 'margin:0' }, 'Riproduzione'), rgRow(), gapRow(), contRow(), preloadRow(), autoResumeRow(), lockWakeRow()); }
+function playbackPanel() { return h('div', { class: 'eq' }, h('h2', { style: 'margin:0' }, 'Riproduzione'), rgRow(), gapRow(), contRow(), preloadRow(), autoResumeRow(), lockWakeRow(), skRow()); }
 function refreshEqUI() {
   document.querySelectorAll('[data-eq-host]').forEach(host => { if (host.id !== 'eqBox' || eqOpen) host.replaceChildren(eqPanel()); });
   document.querySelectorAll('[data-play-host]').forEach(host => host.replaceChildren(playbackPanel()));
@@ -5836,6 +5874,262 @@ function mbKind(g) {
   return { Album: 'album', EP: 'ep', Single: 'singolo' }[g.p] || 'altro';
 }
 const MBK = { album: 'Album in studio', ep: 'EP', live: 'Dal vivo', raccolta: 'Raccolte', singolo: 'Singoli', altro: 'Altro' };
+/* ---------------- Schede: biografia dell'artista e storia dell'album (v1.47) ----------------
+   Da Wikipedia in italiano (in inglese se la voce italiana non c'è), voce intera. La voce giusta si trova con
+   MusicBrainz → Wikidata, così non si confondono gli omonimi; se manca il collegamento provo i titoli più probabili
+   e controllo che parlino di musica. Si cerca SOLO aprendo un artista o un album che non ha ancora la scheda:
+   escono il nome dell'artista e il titolo dell'album, nient'altro. La scheda (testo e foto con i crediti) viene
+   salvata su Dropbox in /_player/schede/ e da lì in poi si legge da Dropbox: resta anche se Wikipedia cambia.
+   Sul telefono ne resta una copia per aprirla subito. Si può aggiornare, cambiare voce o riscrivere a mano. */
+const SK_DIR = '/_player/schede/', SK_CACHE = 'basalto-schede-v1', SK_NONE_DAYS = 30;
+const SKIP_SEC = /^(note|bibliografia|voci correlate|altri progetti|collegamenti esterni|riferimenti|fonti|references|notes|notes and references|external links|see also|further reading|bibliography|sources|citations|footnotes)$/i;
+const skSafe = s => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 120) || 'senza nome';
+const skPath = (kind, o) => kind === 'artista' ? `${SK_DIR}Artisti/${skSafe(o.name)}` : `${SK_DIR}Album/${skSafe(o.artistName + ' - ' + o.title)}`;
+const skOn = () => load(K.sk) !== 'off';
+const skLabel = (kind, o) => kind === 'artista' ? `«${o.name}»` : `«${o.title}» di ${o.artistName}`;
+const SKW = new Map(), SKURL = new Map(), SKD = new Map();   // ricerche in corso · foto già aperte · schede già lette (niente sfarfallio quando la pagina si ridisegna)
+async function skCache(op, name, body, type) {
+  try {
+    const c = await caches.open(SK_CACHE), req = 'schede/' + encodeURIComponent(name);
+    if (op === 'get') return await c.match(req) || null;
+    if (op === 'put') return await c.put(req, new Response(body, { headers: { 'Content-Type': type || 'application/json' } }));
+    if (op === 'del') return await c.delete(req);
+  } catch (e) { return null; }
+}
+async function dbxGet(path) {
+  const tok = await getToken();
+  const r = await fetch(CONTENT + 'files/download', { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok, 'Dropbox-API-Arg': hdrJson({ path }) } });
+  if (r.status === 409) return null;
+  if (!r.ok) throw new Error('Dropbox ' + r.status);
+  return r.blob();
+}
+async function dbxPut(path, body) {
+  const tok = await getToken();
+  const r = await fetch(CONTENT + 'files/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': hdrJson({ path, mode: 'overwrite', mute: true }) }, body });
+  if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error(/scope/i.test(t) ? 'manca il permesso di scrittura' : 'Dropbox ' + r.status); }
+}
+async function skLoad(kind, o) {
+  const key = skPath(kind, o) + '.json', hit = await skCache('get', key);
+  if (hit) { try { return JSON.parse(await hit.text()); } catch (e) {} }
+  if (!linked()) return null;
+  const b = await dbxGet(key); if (!b) return null;
+  const txt = await b.text(), d = JSON.parse(txt);
+  skCache('put', key, txt); return d;
+}
+async function skPhoto(kind, o, d) {
+  if (!d || !d.photo || !d.photo.file) return null;
+  const key = skPath(kind, o) + d.photo.ext; if (SKURL.has(key)) return SKURL.get(key);
+  let b = null; const hit = await skCache('get', key); if (hit) b = await hit.blob();
+  if (!b && linked()) { try { b = await dbxGet(key); if (b) skCache('put', key, b, b.type || 'image/jpeg'); } catch (e) {} }
+  if (!b) return null;
+  const u = URL.createObjectURL(b); SKURL.set(key, u); return u;
+}
+async function skSave(kind, o, d, photo) {
+  const base = skPath(kind, o), txt = JSON.stringify(d);
+  await skCache('put', base + '.json', txt);
+  if (photo) { await skCache('put', base + d.photo.ext, photo, photo.type); SKURL.delete(base + d.photo.ext); }
+  if (d.none) return 'telefono';
+  if (!canWrite()) return 'telefono';
+  try { if (photo) await dbxPut(base + d.photo.ext, photo); await dbxPut(base + '.json', txt); return 'dropbox'; }
+  catch (e) { log(`Scheda ${skLabel(kind, o)}: salvataggio su Dropbox non riuscito (${e.message})`); return 'telefono'; }
+}
+// --- ricerca della voce ---
+async function wpGet(l, q) {
+  const r = await fetch(`https://${l}.wikipedia.org/w/api.php?format=json&formatversion=2&origin=*&` + q);
+  if (!r.ok) throw new Error('Wikipedia ' + r.status);
+  return r.json();
+}
+async function mbWikidata(entity, id) {
+  const j = await mbGet(`${entity}/${id}?inc=url-rels`);
+  const rel = (j.relations || []).find(x => x.type === 'wikidata' && x.url && x.url.resource);
+  const m = rel && rel.url.resource.match(/Q\d+/); return m ? m[0] : null;
+}
+async function wdTitles(q) {
+  const r = await fetch('https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&origin=*&props=sitelinks&sitefilter=itwiki%7Cenwiki&ids=' + q);
+  if (!r.ok) throw new Error('Wikidata ' + r.status);
+  const j = await r.json(), s = (j.entities && j.entities[q] && j.entities[q].sitelinks) || {};
+  return { it: s.itwiki && s.itwiki.title, en: s.enwiki && s.enwiki.title };
+}
+async function skArtistMbid(a) {
+  if (MBC[a.key] && MBC[a.key].id) return MBC[a.key].id;
+  const j = await mbGet('artist?limit=8&query=' + encodeURIComponent('artist:"' + a.name.replace(/"/g, '') + '"'));
+  const cands = j.artists || [], exact = cands.filter(x => normTitle(x.name) === normTitle(a.name));
+  if (exact.length > 1 && a.albums) {        // omonimi: scelgo quello che ha gli album che hai tu
+    const mine = new Set(a.albums.map(k => normTitle((LIB.albums.get(k) || {}).title)).filter(Boolean));
+    let best = null, bestN = 0;
+    for (const x of exact.slice(0, 3)) {
+      const r = await mbGet(`release-group?artist=${x.id}&limit=100`), n = (r['release-groups'] || []).filter(g => mine.has(normTitle(g.title))).length;
+      if (n > bestN) { best = x; bestN = n; }
+    }
+    if (best) return best.id;
+  }
+  return exact[0] ? exact[0].id : null;           // solo con lo stesso nome: meglio nessuna scheda che quella di un altro
+}
+async function skAlbumMbid(al, arid) {
+  const n = normTitle(al.title), near = t => { const m = normTitle(t); return m === n || (m.length >= 4 && n.length >= 4 && (m.startsWith(n) || n.startsWith(m))); };
+  const c = MBC[al.artistKey];
+  if (c && c.rg && arid === c.id) { const g = c.rg.find(g => normTitle(g.t) === n) || c.rg.find(g => near(g.t)); if (g) return g.id; }
+  const q = `releasegroup:"${al.title.replace(/"/g, '')}" AND ` + (arid ? `arid:${arid}` : `artist:"${al.artistName.replace(/"/g, '')}"`);
+  const list = (await mbGet('release-group?limit=10&query=' + encodeURIComponent(q)))['release-groups'] || [];
+  const g = list.find(g => normTitle(g.title) === n) || list.find(g => near(g.title)); return g ? g.id : null;
+}
+const MUSIC_IT = /\b(gruppo|band|cantante|cantautric|cantautor|musicist|rapper|compositor|chitarrist|batterist|bassist|pianist|duo|disc[oh]|album|singol)/i;
+const MUSIC_EN = /\b(band|singer|songwriter|musician|rapper|composer|guitarist|duo|group|album|record)/i;
+async function wpGuess(l, kind, o) {
+  const s = l === 'it' ? (kind === 'artista' ? ['', ' (gruppo musicale)', ' (cantante)', ' (musicista)', ' (rapper)'] : ['', ' (album)', ` (album ${o.artistName})`])
+    : (kind === 'artista' ? ['', ' (band)', ' (musician)', ' (singer)', ' (rapper)'] : ['', ' (album)', ` (${o.artistName} album)`]);
+  const name = kind === 'artista' ? o.name : o.title, titles = s.map(x => name + x);
+  const j = await wpGet(l, 'action=query&prop=extracts%7Cpageprops&exintro=1&explaintext=1&exlimit=max&redirects=1&titles=' + encodeURIComponent(titles.join('|')));
+  const q = j.query || {}, map = new Map(titles.map(t => [t, t]));
+  for (const x of q.normalized || []) for (const [k, v] of map) if (v === x.from) map.set(k, x.to);
+  for (const x of q.redirects || []) for (const [k, v] of map) if (v === x.from) map.set(k, x.to);
+  const pages = new Map((q.pages || []).map(p => [p.title, p])), re = l === 'it' ? MUSIC_IT : MUSIC_EN;
+  for (const t of titles) {
+    const p = pages.get(map.get(t)); if (!p || p.missing || !p.extract || (p.pageprops && 'disambiguation' in p.pageprops)) continue;
+    if (!re.test(p.extract)) continue;
+    if (kind === 'album' && !norm(p.extract).includes(norm(o.artistName))) continue;
+    return p.title;
+  }
+  return null;
+}
+function wpBlocks(txt) {
+  const out = []; let skip = 0;
+  for (const raw of String(txt || '').split('\n')) {
+    const line = raw.trim(); if (!line) continue;
+    const m = line.match(/^(={2,6})\s*(.*?)\s*=+$/);
+    if (m) { const lvl = m[1].length; if (skip && lvl > skip) continue; skip = 0; if (SKIP_SEC.test(m[2])) { skip = lvl; continue; } out.push({ h: m[2], l: lvl }); continue; }
+    if (!skip) out.push({ p: line });
+  }
+  const keep = []; let need = 9;                 // via i titoli rimasti senza testo
+  for (let i = out.length - 1; i >= 0; i--) { const b = out[i]; if (b.p) { keep.push(b); need = 9; } else if (b.l < need) { keep.push(b); need = b.l; } }
+  return keep.reverse();
+}
+async function wpArticle(l, title) {
+  const j = await wpGet(l, 'action=query&prop=extracts%7Cpageimages%7Cinfo&inprop=url&explaintext=1&exsectionformat=wiki&redirects=1&piprop=thumbnail%7Cname&pithumbsize=900&titles=' + encodeURIComponent(title));
+  const p = ((j.query && j.query.pages) || [])[0];
+  if (!p || p.missing || !p.extract) return null;
+  return { title: p.title, url: p.fullurl || `https://${l}.wikipedia.org/wiki/` + encodeURIComponent(p.title.replace(/ /g, '_')), blocks: wpBlocks(p.extract), thumb: p.thumbnail && p.thumbnail.source, image: p.pageimage };
+}
+async function wpCredit(l, file) {
+  const j = await wpGet(l, 'action=query&prop=imageinfo&iiprop=extmetadata&iiextmetadatafilter=Artist%7CLicenseShortName&titles=' + encodeURIComponent('File:' + file));
+  const p = ((j.query && j.query.pages) || [])[0], md = (p && p.imageinfo && p.imageinfo[0] && p.imageinfo[0].extmetadata) || {};
+  const strip = s => String(s || '').replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim();
+  return { author: strip(md.Artist && md.Artist.value).slice(0, 140), license: strip(md.LicenseShortName && md.LicenseShortName.value).slice(0, 60) };
+}
+function wpFromInput(s) {        // link o titolo scritto da te
+  s = String(s || '').trim(); if (!s) return null;
+  const m = s.match(/^https?:\/\/(it|en)\.(?:m\.)?wikipedia\.org\/wiki\/([^?#]+)/i);
+  if (m) return { l: m[1].toLowerCase(), title: decodeURIComponent(m[2]).replace(/_/g, ' ') };
+  if (/^https?:/i.test(s)) return null;
+  return { l: 'it', title: s };
+}
+async function skFind(kind, o, want) {
+  if (want) return { ...want, how: 'scelta da te' };
+  let qid = null;
+  try {
+    const ar = LIB.artists.get(kind === 'artista' ? o.key : o.artistKey) || { key: o.artistKey, name: o.artistName };
+    const arid = await skArtistMbid(ar);
+    const id = kind === 'artista' ? arid : await skAlbumMbid(o, arid);
+    if (id) qid = await mbWikidata(kind === 'artista' ? 'artist' : 'release-group', id);
+  } catch (e) { log(`Scheda ${skLabel(kind, o)}: MusicBrainz non risponde (${e.message}), provo direttamente su Wikipedia`); }
+  if (qid) { const t = await wdTitles(qid); if (t.it) return { l: 'it', title: t.it, qid, how: 'MusicBrainz' }; if (t.en) return { l: 'en', title: t.en, qid, how: 'MusicBrainz' }; }
+  for (const l of ['it', 'en']) { const t = await wpGuess(l, kind, o); if (t) return { l, title: t, qid, how: 'titolo' }; }
+  return null;
+}
+async function skFetch(kind, o, want) {
+  const f = await skFind(kind, o, want);
+  if (!f) return { d: { v: 1, none: 1, at: Date.now() } };
+  const art = await wpArticle(f.l, f.title);
+  if (!art || !art.blocks.length) return want ? { err: `su Wikipedia ${f.l === 'en' ? 'in inglese ' : ''}non c'è la voce «${f.title}»` } : { d: { v: 1, none: 1, at: Date.now() } };
+  const d = { v: 1, kind, name: kind === 'artista' ? o.name : o.title, artist: kind === 'album' ? o.artistName : undefined,
+    by: 'wikipedia', lang: f.l, title: art.title, url: art.url, wd: f.qid || null, how: f.how, at: Date.now(), blocks: art.blocks };
+  let photo = null;
+  if (kind === 'artista' && art.thumb && art.image) {
+    try {
+      const r = await fetch(art.thumb); if (!r.ok) throw new Error('foto ' + r.status);
+      photo = await r.blob(); const cr = await wpCredit(f.l, art.image).catch(() => ({}));
+      d.photo = { file: art.image, ext: /png/.test(photo.type) ? '.png' : /webp/.test(photo.type) ? '.webp' : '.jpg', author: cr.author || '', license: cr.license || '' };
+    } catch (e) { photo = null; log(`Scheda ${skLabel(kind, o)}: foto non scaricata (${e.message})`); }
+  }
+  return { d, photo };
+}
+function skText(d) { return (d.blocks || []).map(b => b.h ? '='.repeat(b.l) + ' ' + b.h + ' ' + '='.repeat(b.l) : b.p).join('\n\n'); }
+// --- schermata ---
+function skSection(kind, o) {
+  const box = h('div', { class: 'box sk', 'data-sk': skPath(kind, o) });
+  paintSk(box, kind, o);
+  return h('div', null, h('div', { class: 'sec-h' }, kind === 'artista' ? 'Biografia' : 'Il disco'), box);
+}
+async function paintSk(box, kind, o, opts = {}) {
+  const key = skPath(kind, o), busy = (t) => box.replaceChildren(h('div', { class: 'between' }, h('span', { class: 'small mut' }, t), h('span', { class: 'spin' })));
+  if (!opts.fresh && !opts.want && SKD.has(key) && !SKW.has(key)) { drawSk(box, kind, o, SKD.get(key)); return; }
+  busy('Carico la scheda…');
+  let d = null, err = null;
+  if (!opts.fresh && !SKW.has(key)) { try { d = await skLoad(kind, o); } catch (e) { err = 'Dropbox: ' + e.message; } }
+  const stale = d && d.none && Date.now() - d.at > SK_NONE_DAYS * 864e5;
+  if (!d && !err && !skOn() && !opts.fresh && !opts.want && !SKW.has(key)) {          // ricerca automatica spenta: solo su richiesta
+    box.replaceChildren(h('p', { class: 'small mut', style: 'margin-top:0' }, `Cerca ${kind === 'artista' ? 'la biografia' : 'la storia del disco'} su Wikipedia (escono solo il nome dell'artista${kind === 'album' ? ' e il titolo' : ''}); resterà salvata su Dropbox.`),
+      h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: () => paintSk(box, kind, o, { fresh: true }) }, 'Cerca su Wikipedia')));
+    return;
+  }
+  if ((!d || stale || opts.fresh) && !err) {
+    if (!navigator.onLine) err = 'Sei senza rete: la scheda verrà cercata quando torni online.';
+    else {
+      busy(kind === 'artista' ? 'Cerco la biografia su Wikipedia…' : 'Cerco la storia del disco su Wikipedia…');
+      try {
+        if (!SKW.has(key)) SKW.set(key, (async () => {
+          const r = await skFetch(kind, o, opts.want); if (r.err) return r;
+          const d = r.d, where = await skSave(kind, o, d, r.photo);
+          log(d.none ? `Scheda ${skLabel(kind, o)}: nessuna voce su Wikipedia` : `Scheda ${skLabel(kind, o)}: «${d.title}» da Wikipedia${d.lang === 'en' ? ' in inglese' : ''} (${d.how}) · ${d.blocks.filter(b => b.p).length} paragrafi${d.photo ? ' · foto' : ''} · ${where === 'dropbox' ? 'salvata su Dropbox' : 'solo sul telefono'}`);
+          return { d };
+        })().finally(() => SKW.delete(key)));
+        const r = await SKW.get(key);
+        if (r.err) err = r.err; else d = r.d;
+      } catch (e) { err = 'Wikipedia non risponde (' + e.message + ')'; }
+    }
+  }
+  if (!box.isConnected && !document.querySelector(`[data-sk="${CSS.escape(key)}"]`)) return;
+  const target = box.isConnected ? box : document.querySelector(`[data-sk="${CSS.escape(key)}"]`);
+  if (err && !d) { target.replaceChildren(h('p', { class: 'small mut' }, err), h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: () => paintSk(target, kind, o) }, 'Riprova'))); return; }
+  if (err) toast(err);
+  SKD.set(key, d); drawSk(target, kind, o, d);
+}
+async function drawSk(box, kind, o, d) {
+  const edit = () => editSk(box, kind, o, d), fresh = () => paintSk(box, kind, o, { fresh: true });
+  if (d.none) {
+    box.replaceChildren(h('p', { class: 'small mut' }, `Su Wikipedia non ho trovato una voce per ${skLabel(kind, o)}.`),
+      h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: edit }, 'Scrivila tu o indica la voce'), h('button', { class: 'btn sec', onclick: fresh }, 'Cerca di nuovo')));
+    return;
+  }
+  const paras = d.blocks || [], firstH = paras.findIndex(b => b.h), intro = firstH < 0 ? Math.min(paras.length, 3) : Math.max(1, Math.min(firstH, 4));
+  const body = h('div', { class: 'skt' });
+  const show = all => body.replaceChildren(...paras.slice(0, all ? paras.length : intro).map(b => b.h ? h(b.l <= 2 ? 'h3' : 'h4', null, b.h) : h('p', { class: 'skp' }, b.p)),
+    paras.length > intro ? h('button', { class: 'btn sec', style: 'margin-top:8px', onclick: () => { show(!all); if (all) box.scrollIntoView({ block: 'start' }); } }, all ? 'Mostra meno' : 'Leggi tutto') : null);
+  show(false);
+  const src = d.by === 'manuale' ? 'Scritta da te' : `Da Wikipedia${d.lang === 'en' ? ' in inglese' : ''}, voce «${d.title}» · testo con licenza CC BY-SA 4.0`;
+  const img = h('img', { class: 'skph hidden', alt: kind === 'artista' ? 'Foto di ' + o.name : '' });
+  box.replaceChildren(img, body,
+    h('p', { class: 'small mut', style: 'margin-top:12px' }, src + (d.photo ? ` · Foto: ${d.photo.author || 'autore non indicato'}${d.photo.license ? ', ' + d.photo.license : ''} (Wikimedia Commons)` : '') + ` · aggiornata il ${new Date(d.at).toLocaleDateString('it-IT')}`),
+    h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: fresh }, 'Aggiorna da Wikipedia'), h('button', { class: 'btn sec', onclick: edit }, 'Modifica')));
+  const u = await skPhoto(kind, o, d); if (u) { img.src = u; img.classList.remove('hidden'); }
+}
+function editSk(box, kind, o, d) {
+  const ta = h('textarea', { class: 'sked', 'aria-label': 'Testo della scheda' }); ta.value = d && !d.none ? skText(d) : '';
+  const wp = h('input', { class: 'sked1', type: 'text', placeholder: 'Link o titolo della voce di Wikipedia', 'aria-label': 'Voce di Wikipedia' });
+  if (d && d.url && d.by !== 'manuale') wp.value = d.url;
+  box.replaceChildren(
+    h('p', { class: 'small mut', style: 'margin-top:0' }, 'Voce di Wikipedia giusta (link o titolo):'), wp,
+    h('div', { class: 'btnrow' }, h('button', { class: 'btn', onclick: () => { const w = wpFromInput(wp.value); if (!w) { toast('Scrivi un link di it.wikipedia.org o en.wikipedia.org, oppure il titolo della voce'); return; } paintSk(box, kind, o, { fresh: true, want: w }); } }, 'Usa questa voce')),
+    h('p', { class: 'small mut' }, 'Oppure scrivi tu il testo (una riga vuota tra i paragrafi, «== Titolo ==» per i capitoli):'), ta,
+    h('div', { class: 'btnrow' },
+      h('button', { class: 'btn', onclick: async () => {
+        const txt = ta.value.trim(); if (!txt) { toast('Il testo è vuoto'); return; }
+        const nd = { v: 1, kind, name: kind === 'artista' ? o.name : o.title, artist: kind === 'album' ? o.artistName : undefined, by: 'manuale', at: Date.now(),
+          blocks: wpBlocks(txt.replace(/\n{2,}/g, '\n')), photo: d && d.photo };
+        const where = await skSave(kind, o, nd); SKD.set(skPath(kind, o), nd); log(`Scheda ${skLabel(kind, o)}: scritta da te · ${where === 'dropbox' ? 'salvata su Dropbox' : 'solo sul telefono'}`);
+        drawSk(box, kind, o, nd); } }, 'Salva il testo'),
+      h('button', { class: 'btn sec', onclick: () => d ? drawSk(box, kind, o, d) : paintSk(box, kind, o) }, 'Annulla')));
+}
 function missingSection(a) {
   const box = h('div', { class: 'box', 'data-mb': a.key });
   paintMissing(box, a);
@@ -5893,6 +6187,10 @@ function maybeContinueQueue() {
   if (!isHidden()) toast('La coda continua con brani simili');
   afterQueueEdit();
 }
+function skRow() {
+  return swRow('Biografie e schede dei dischi', 'La prima volta che apri un artista o un album cerco su Wikipedia la biografia o la storia del disco (in italiano, altrimenti in inglese) e le salvo su Dropbox in _player/schede: da lì restano anche se Wikipedia cambia. Escono solo il nome dell\'artista e il titolo dell\'album. Spento: le cerco solo quando lo chiedi.',
+    skOn(), on => { store(K.sk, on ? null : 'off'); log('Schede da Wikipedia ' + (on ? 'automatiche' : 'solo su richiesta')); refreshEqUI(); });
+}
 function contRow() {
   return swRow('La coda continua da sola', 'Quando arriva l\'ultimo brano della coda aggiungo brani simili della tua libreria (come «Avvia un mix»), così la musica non si ferma. Non succede con la ripetizione attiva.',
     contOn(), on => { store(K.cont, on ? null : 'off'); log('Coda che continua da sola ' + (on ? 'attivata' : 'disattivata')); refreshEqUI(); if (on) maybeContinueQueue(); });
@@ -5933,6 +6231,7 @@ function viewArtist(key) {
       h('span', { class: 'txt' }, h('span', { class: 't1' }, 'Avvia un mix'), h('span', { class: 't2' }, 'Brani di ' + a.name + ' e di artisti affini')), chev()),
     h('div', { class: 'sec-h' }, 'Album'),
     h('div', { class: 'grid' }, ...a.albums.map(k => albumCard(LIB.albums.get(k), false))),
+    skSection('artista', a),
     similarSection(a),
     h('div', { class: 'sec-h' }, 'Notizie e altri siti'),
     siteLinks(a),
@@ -5972,7 +6271,8 @@ function viewAlbum(key) {
         LIB.artists.has(al.artistKey) ? sAct('radio', 'Avvia un mix da ' + al.artistName, () => startSeedMix({ artistKey: al.artistKey }, al.artistName)) : null,
         LIB.artists.has(al.artistKey) ? sAct('user', 'Vai all\'artista', () => go({ v: 'artist', key: al.artistKey })) : null]) })),
     hasBooklet(al) ? h('div', { style: 'margin-top:10px' }, bookletRow(al)) : null,
-    h('div', { style: 'margin-top:10px' }, ...rows)];
+    h('div', { style: 'margin-top:10px' }, ...rows),
+    skSection('album', al)];
 }
 function trackRow(t, i, onclick, sub, ctx) {
   const info = trackInfo(t);
