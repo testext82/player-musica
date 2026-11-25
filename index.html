@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <!-- La pagina comunica solo con Dropbox; con MusicBrainz soltanto quando chiedi «Album che non hai» (riceve il nome dell'artista) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org https://it.wikipedia.org https://en.wikipedia.org https://www.wikidata.org https://upload.wikimedia.org; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org https://it.wikipedia.org https://en.wikipedia.org https://www.wikidata.org https://upload.wikimedia.org; media-src https://*.dropboxusercontent.com blob:; img-src 'self' data: blob: https://*.dropboxusercontent.com https://upload.wikimedia.org; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Basalto">
@@ -331,7 +331,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.48';
+const VERSION = '1.49';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -5918,6 +5918,7 @@ async function skLoad(kind, o) {
 }
 async function skPhoto(kind, o, d) {
   if (!d || !d.photo || !d.photo.file) return null;
+  if (d.photo.remote) return d.photo.remote;
   const key = skPath(kind, o) + d.photo.ext; if (SKURL.has(key)) return SKURL.get(key);
   let b = null; const hit = await skCache('get', key); if (hit) b = await hit.blob();
   if (!b && linked()) { try { b = await dbxGet(key); if (b) skCache('put', key, b, b.type || 'image/jpeg'); } catch (e) {} }
@@ -6004,19 +6005,35 @@ function wpBlocks(txt) {
   for (let i = out.length - 1; i >= 0; i--) { const b = out[i]; if (b.p) { keep.push(b); need = 9; } else if (b.l < need) { keep.push(b); need = b.l; } }
   return keep.reverse();
 }
-// foto a 960 px: dal 2026 Wikimedia accetta solo le misure standard delle miniature (20…500, 960, 1280…), le altre
-// rispondono «429» e Safari dice solo «Load failed» (registro del 25/11, foto dei Pearl Jam)
 async function wpArticle(l, title) {
-  const j = await wpGet(l, 'action=query&prop=extracts%7Cpageimages%7Cinfo&inprop=url&explaintext=1&exsectionformat=wiki&redirects=1&piprop=thumbnail%7Cname&pithumbsize=960&titles=' + encodeURIComponent(title));
+  const j = await wpGet(l, 'action=query&prop=extracts%7Cpageimages%7Cinfo&inprop=url&explaintext=1&exsectionformat=wiki&redirects=1&piprop=name&titles=' + encodeURIComponent(title));
   const p = ((j.query && j.query.pages) || [])[0];
   if (!p || p.missing || !p.extract) return null;
-  return { title: p.title, url: p.fullurl || `https://${l}.wikipedia.org/wiki/` + encodeURIComponent(p.title.replace(/ /g, '_')), blocks: wpBlocks(p.extract), thumb: p.thumbnail && p.thumbnail.source, image: p.pageimage };
+  return { title: p.title, url: p.fullurl || `https://${l}.wikipedia.org/wiki/` + encodeURIComponent(p.title.replace(/ /g, '_')), blocks: wpBlocks(p.extract), image: p.pageimage };
 }
-async function wpCredit(l, file) {
-  const j = await wpGet(l, 'action=query&prop=imageinfo&iiprop=extmetadata&iiextmetadatafilter=Artist%7CLicenseShortName&titles=' + encodeURIComponent('File:' + file));
-  const p = ((j.query && j.query.pages) || [])[0], md = (p && p.imageinfo && p.imageinfo[0] && p.imageinfo[0].extmetadata) || {};
+async function wpImage(l, title) {                 // foto principale di una voce (per la voce inglese, se quella italiana non ne ha)
+  const j = await wpGet(l, 'action=query&prop=pageimages&piprop=name&redirects=1&titles=' + encodeURIComponent(title));
+  const p = ((j.query && j.query.pages) || [])[0]; return (p && p.pageimage) || null;
+}
+/* Foto (v1.49). Dal 2026 Wikimedia dà le miniature solo nelle misure standard di LARGHEZZA (…, 500, 960, 1280, …) e alle
+   altre risponde «429» senza permessi CORS: Safari dice solo «Load failed» (registro del 25/11, Pearl Jam). La miniatura
+   della voce è calcolata sul lato più lungo (una foto verticale a 960 di altezza ha una larghezza fuori standard): ora
+   chiedo a Wikimedia l'indirizzo della miniatura larga esattamente 960 px, e se non va 500 px. */
+async function wpPhotoInfo(l, file, w) {
+  const j = await wpGet(l, `action=query&prop=imageinfo&iiprop=url%7Cextmetadata&iiurlwidth=${w}&iiextmetadatafilter=Artist%7CLicenseShortName&titles=` + encodeURIComponent('File:' + file));
+  const p = ((j.query && j.query.pages) || [])[0], ii = (p && p.imageinfo && p.imageinfo[0]) || {}, md = ii.extmetadata || {};
   const strip = s => String(s || '').replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim();
-  return { author: strip(md.Artist && md.Artist.value).slice(0, 140), license: strip(md.LicenseShortName && md.LicenseShortName.value).slice(0, 60) };
+  return { url: ii.thumburl || ii.url || '', author: strip(md.Artist && md.Artist.value).slice(0, 140), license: strip(md.LicenseShortName && md.LicenseShortName.value).slice(0, 60) };
+}
+async function wpPhoto(l, file) {
+  let last = '', first = null;
+  for (const w of [960, 500]) {
+    const info = await wpPhotoInfo(l, file, w); if (!info.url) { last = 'indirizzo della foto mancante'; continue; }
+    const px = (info.url.match(/\/(\d+)px-/) || [])[1], size = px ? px + ' px' : 'originale'; if (!first) first = info;
+    try { const r = await fetch(info.url); if (!r.ok) throw new Error('HTTP ' + r.status); return { blob: await r.blob(), ...info, size }; }
+    catch (e) { last = `${e.message} · ${size}`; }
+  }
+  const e = new Error(last); e.info = first; throw e;
 }
 function wpFromInput(s) {        // link o titolo scritto da te
   s = String(s || '').trim(); if (!s) return null;
@@ -6034,7 +6051,7 @@ async function skFind(kind, o, want) {
     const id = kind === 'artista' ? arid : await skAlbumMbid(o, arid);
     if (id) qid = await mbWikidata(kind === 'artista' ? 'artist' : 'release-group', id);
   } catch (e) { log(`Scheda ${skLabel(kind, o)}: MusicBrainz non risponde (${e.message}), provo direttamente su Wikipedia`); }
-  if (qid) { const t = await wdTitles(qid); if (t.it) return { l: 'it', title: t.it, qid, how: 'MusicBrainz' }; if (t.en) return { l: 'en', title: t.en, qid, how: 'MusicBrainz' }; }
+  if (qid) { const t = await wdTitles(qid); if (t.it) return { l: 'it', title: t.it, qid, how: 'MusicBrainz', alt: t.en ? { l: 'en', title: t.en } : null }; if (t.en) return { l: 'en', title: t.en, qid, how: 'MusicBrainz' }; }
   for (const l of ['it', 'en']) { const t = await wpGuess(l, kind, o); if (t) return { l, title: t, qid, how: 'titolo' }; }
   return null;
 }
@@ -6046,12 +6063,19 @@ async function skFetch(kind, o, want) {
   const d = { v: 1, kind, name: kind === 'artista' ? o.name : o.title, artist: kind === 'album' ? o.artistName : undefined,
     by: 'wikipedia', lang: f.l, title: art.title, url: art.url, wd: f.qid || null, how: f.how, at: Date.now(), blocks: art.blocks };
   let photo = null;
-  if (kind === 'artista' && art.thumb && art.image) {
-    try {
-      const r = await fetch(art.thumb); if (!r.ok) throw new Error('foto ' + r.status);
-      photo = await r.blob(); const cr = await wpCredit(f.l, art.image).catch(() => ({}));
-      d.photo = { file: art.image, ext: /png/.test(photo.type) ? '.png' : /webp/.test(photo.type) ? '.webp' : '.jpg', author: cr.author || '', license: cr.license || '' };
-    } catch (e) { photo = null; log(`Scheda ${skLabel(kind, o)}: foto non scaricata (${e.message})`); }
+  if (kind === 'artista') {
+    let img = art.image, il = f.l;
+    if (!img && f.alt) { img = await wpImage(f.alt.l, f.alt.title).catch(() => null); il = f.alt.l; }    // la voce italiana non ha foto: provo quella inglese
+    if (img) try {
+      const ph = await wpPhoto(il, img); photo = ph.blob;
+      d.photo = { file: img, ext: /png/.test(photo.type) ? '.png' : /webp/.test(photo.type) ? '.webp' : '.jpg', author: ph.author || '', license: ph.license || '', from: il };
+      log(`Scheda ${skLabel(kind, o)}: foto ${ph.size}${il !== f.l ? ' (dalla voce inglese)' : ''}`);
+    } catch (e) {
+      photo = null;
+      // non si lascia scaricare (permessi CORS): la mostro direttamente da Wikimedia, senza salvarla
+      if (e.info && e.info.url) d.photo = { file: img, remote: e.info.url, author: e.info.author || '', license: e.info.license || '', from: il };
+      log(`Scheda ${skLabel(kind, o)}: foto non scaricata (${e.message})${d.photo ? ', la mostro da Wikimedia' : ''}`);
+    }
   }
   return { d, photo };
 }
