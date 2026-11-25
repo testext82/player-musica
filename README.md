@@ -31,6 +31,8 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.50: foto della biografia: per le sole foto di Wikimedia Basalto manda l'indirizzo del sito (https://testext82.github.io/, senza percorso), che altrimenti non manda mai (meta referrer «no-referrer»). Dal 2026 upload.wikimedia.org rifiuta spesso le richieste senza «Referer» (Phabricator T413570): «Load failed» anche a 500 px e foto non visibile nemmeno caricata direttamente (25/11, Pearl Jam, Black Sabbath, Beatles). Le foto rimaste «da Wikimedia» vengono riscaricate e salvate su Dropbox appena si apre la scheda; una foto che non arriva non lascia più un riquadro vuoto.
+
 v1.49: foto della biografia chiesta a Wikimedia come miniatura larga esattamente 960 px (se non va 500 px): la miniatura della voce è calcolata sul lato più lungo, e una foto verticale aveva una larghezza fuori standard → «429», in Safari «Load failed» (Pearl Jam anche con la v1.48). Se la voce italiana non ha una foto prendo quella della voce inglese. Il registro dice la misura usata o l'errore preciso. Se la foto non si lascia scaricare, la mostro direttamente da Wikimedia (non salvata su Dropbox).
 
 v1.48: foto della biografia chiesta a 960 px, una delle misure standard di Wikimedia: con 900 px Wikimedia rispondeva «429» (registro del 25/11: «foto non scaricata (Load failed)» per i Pearl Jam). Per le schede già salvate senza foto basta «Aggiorna da Wikipedia».
