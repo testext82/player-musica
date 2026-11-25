@@ -74,6 +74,10 @@ h1{font-size:32px;font-weight:800;letter-spacing:-.02em;margin:0;line-height:1.1
 .track .tt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .track .tt span:first-child{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .track .d{font-size:13px;color:var(--mut);flex:none}
+.track .o{display:flex;flex:none;color:var(--acc)}.track .o:empty{display:none}
+.track.na,.card.na{opacity:.38}
+.offrow{margin-top:10px;padding:6px 0}.offrow .icobox.on{color:var(--acc)}
+.offnote{display:flex;gap:10px;align-items:center}
 .track.now .tt span:first-child,.track.now .n{color:var(--acc)}
 .disc{font-size:13px;font-weight:700;color:var(--mut);margin:16px 0 4px;text-transform:uppercase;letter-spacing:.06em}
 .sec-h{font-size:19px;font-weight:700;margin:24px 0 8px}
@@ -331,7 +335,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.51';
+const VERSION = '1.52';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -343,7 +347,7 @@ const LINK_TTL = 2 * 3600 * 1000;   // i link Dropbox durano 4 ore: li rinnoviam
 const K = { updSkip: 'mx_upd_skip', user: 'mx_user_v1', userDirty: 'mx_user_dirty', scopes: 'mx_scopes', wantWrite: 'mx_want_write', reqScope: 'mx_req_scope', appKey: 'mx_app_key', refresh: 'mx_refresh', verifier: 'mx_verifier', state: 'mx_state', log: 'mx_log',
             index: 'mx_index_v3', tags: 'mx_tags_v1', ameta: 'mx_ameta_v2', libView: 'mx_libview', cues: 'mx_cues_v1', resume: 'mx_resume_v2', libTab: 'mx_libtab', eq: 'mx_eq_v1', autoResume: 'mx_autoresume', lockWake: 'mx_lockwake', preload: 'mx_preload',
             rg: 'mx_rg_v1', gap: 'mx_gap', gapBg: 'mx_gap_bg', gapLead: 'mx_gap_lead', statsP: 'mx_stats_p', pseek: 'mx_pseek',
-            mb: 'mx_mb_v1', mbKind: 'mx_mb_kind', cont: 'mx_cont', sk: 'mx_sk', theme: 'mx_theme', rhythm: 'mx_rhythm_v1', rxLag: 'mx_rx_lag', rxDrums: 'mx_rx_drums' };
+            mb: 'mx_mb_v1', mbKind: 'mx_mb_kind', cont: 'mx_cont', sk: 'mx_sk', theme: 'mx_theme', rhythm: 'mx_rhythm_v1', rxLag: 'mx_rx_lag', rxDrums: 'mx_rx_drums', off: 'mx_off_v1', offN: 'mx_off_n' };
 const PALETTE = ['#1D2B53', '#2B2D42', '#0F3D3E', '#7D2E68', '#4A3B5C', '#264653', '#3A3A40', '#5A3E2B', '#30475E', '#4E3B31'];
 
 /* ---------------- riconoscimento della libreria (funzioni pure) ---------------- */
@@ -629,6 +633,9 @@ const ICONS = {
   grip: '<line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/>',
   x: '<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>',
   check: '<polyline points="5 12.5 10 17.5 19 7"/>',
+  dl: '<line x1="12" y1="4" x2="12" y2="15"/><polyline points="7.5 10.5 12 15 16.5 10.5"/><line x1="5" y1="19.5" x2="19" y2="19.5"/>',
+  dlOn: '<circle cx="12" cy="12" r="9.5" fill="currentColor" stroke="none"/><path d="M12 7v8.5M8.2 12l3.8 3.8 3.8-3.8" style="stroke:var(--bg)"/>',
+  noNet: '<line x1="3.5" y1="3.5" x2="20.5" y2="20.5"/><path d="M8.5 7.4A6 6 0 0 1 17.6 11h.4a3.5 3.5 0 0 1 2.3 6.1"/><path d="M6.7 9.2A4.2 4.2 0 0 0 7.5 17.5h9"/>',
   ticket: '<path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h13A1.5 1.5 0 0 1 20 7.5V10a2 2 0 0 0 0 4v2.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 16.5V14a2 2 0 0 0 0-4z"/><line x1="14.5" y1="6" x2="14.5" y2="18" stroke-dasharray="1.6 2.2"/>',
   wiki: '<text x="12" y="18.5" font-size="19" font-weight="700" text-anchor="middle" fill="currentColor" stroke="none" font-family="Georgia,\'Times New Roman\',serif">W</text>',
   star: '<path d="M12 3.6l2.5 5.3 5.8.7-4.3 4 1.1 5.7L12 16.5l-5.1 2.8 1.1-5.7-4.3-4 5.8-.7z"/>',
@@ -726,15 +733,25 @@ async function getToken() {
   setToken(j);
   return accessToken;
 }
+// v1.52 · rete: navigator.onLine dice «senza rete» solo in modalità aereo; una richiesta fallita (galleria, nessun segnale)
+// vale come «senza rete» per un minuto, così la coda salta ai brani scaricati invece di fermarsi
+const NET = { downAt: 0 };
+const netOff = () => navigator.onLine === false || (NET.downAt > 0 && Date.now() - NET.downAt < 60000);
+const navOff = () => navigator.onLine === false;      // per l'interfaccia: solo quando iOS dice davvero «senza rete» (un errore isolato non oscura la libreria)
 async function rpc(base, endpoint, args, retry = true) {
-  const t = await getToken();
-  const r = await fetch(base + endpoint, { method: 'POST', headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' }, body: JSON.stringify(args) });
+  let t, r;
+  try {
+    t = await getToken();
+    r = await fetch(base + endpoint, { method: 'POST', headers: { 'Authorization': 'Bearer ' + t, 'Content-Type': 'application/json' }, body: JSON.stringify(args) });
+  } catch (e) { if (e instanceof TypeError) NET.downAt = Date.now(); throw e; }
+  NET.downAt = 0;
   if (r.status === 401 && retry) { accessToken = null; return rpc(base, endpoint, args, false); }
   if (!r.ok) { const txt = await r.text().catch(() => ''); const e = new Error(`Dropbox (${endpoint}) ha risposto ${r.status}: ${txt.slice(0, 200)}`); e.status = r.status; e.body = txt; throw e; }
   return r.json();
 }
 const api = (endpoint, args) => rpc(API, endpoint, args);
 async function readRange(path, start, len, retry = true) {
+  if (offHas(path)) { const b = await offBlob(path).catch(() => null); if (b) return new Uint8Array(await b.slice(start, start + len).arrayBuffer()); }   // brano scaricato: dal telefono
   const t = await getToken();
   const ctrl = new AbortController();
   const r = await fetch(CONTENT + 'files/download', { method: 'POST', signal: ctrl.signal,
@@ -764,7 +781,7 @@ let CUES = loadJSON(K.cues) || {};      // file .cue già letti
 let TAGS = loadJSON(K.tags) || {};      // file -> tag FLAC
 let LIB = { artists: new Map(), albums: new Map(), tracks: new Map() };
 let syncing = false, syncCount = 0, enriching = false, enrichDone = 0, enrichTotal = 0;
-function buildLib() { LIB = buildLibCore(IDX.files, AMETA, CUES); }
+function buildLib() { LIB = buildLibCore(IDX.files, AMETA, CUES); if (OFF.db && (Object.keys(OFFP.a).length || Object.keys(OFFP.p).length || Object.keys(OFFP.t).length)) offSoon(); }
 let saveTimers = {};
 function saveSoon(key, getter) { clearTimeout(saveTimers[key]); saveTimers[key] = setTimeout(() => { if (!saveJSON(key, getter())) log('Memoria del browser piena: ' + key); }, 800); }
 
@@ -800,10 +817,11 @@ async function syncIndex(full = false) {
     IDX = { v: IDXV, files, cursor: res.cursor, at: Date.now() };
     if (!saveJSON(K.index, IDX)) log('Indice troppo grande per la memoria del browser: verrà riletto a ogni avvio');
     if (changed) { buildLib(); log(`Libreria aggiornata: ${LIB.albums.size} album, ${LIB.tracks.size} brani`); }
+    OFF.libOk = true; offSoon(changed ? 1500 : 4000);        // libreria certa: i brani scaricati si possono allineare (anche cancellando)
   } catch (e) {
     if (e instanceof NeedLogin) { bootError = 'Sessione Dropbox scaduta: ricollega Dropbox.'; syncing = false; render(); return; }
     log('Aggiornamento libreria non riuscito: ' + e.message);
-    toast('Aggiornamento della libreria non riuscito');
+    if (!netOff()) toast('Aggiornamento della libreria non riuscito');
   } finally {
     syncing = false;
   }
@@ -1043,7 +1061,7 @@ async function loadAlbumTags(albumKey) {
     let al = LIB.albums.get(albumKey); if (!al) return;
     // 1) album in un file unico: leggo il .cue per ricavare i brani
     const pend = [...new Map(al.tracks.map(k => LIB.tracks.get(k)).filter(t => t && t.cuePending).map(t => [t.cuePending.path, t.cuePending])).values()];
-    if (pend.length) {
+    if (pend.length && !netOff()) {
       for (const c of pend) { try { await loadCue(c.path, c.rev); } catch (e) { log('.cue non letto: ' + e.message); } }
       buildLib(); refreshViews(); al = LIB.albums.get(albumKey); if (!al) return;
     }
@@ -1051,9 +1069,9 @@ async function loadAlbumTags(albumKey) {
     const files = [], seen = new Set();
     for (const k of al.tracks) { const t = LIB.tracks.get(k); if (!t || t.ext !== 'flac' || seen.has(t.file)) continue; seen.add(t.file); files.push(t); }
     let wantPic = !al.img && !embeddedArt.has(albumKey) && !noPic.has(albumKey);
-    const todo = files.filter(t => !tagFresh(t));
+    const todo = files.filter(t => !tagFresh(t) && (!netOff() || offHas(t.file)));      // senza rete: solo i brani scaricati
     const first = files[0];
-    if (wantPic && first && !todo.includes(first)) todo.unshift(first);
+    if (wantPic && first && !todo.includes(first) && (!netOff() || offHas(first.file))) todo.unshift(first);
     let metaChanged = false, i = 0;
     const worker = async () => {
       while (i < todo.length) {
@@ -1258,7 +1276,7 @@ function tempLink(path) {
   return p;
 }
 // chiede il link appena il dito tocca, prima che il tocco diventi un «clic»
-function warm(t) { if (t) tempLink(fileOf(t)).catch(() => {}); }
+function warm(t) { if (!t) return; if (offHas(fileOf(t))) offBlob(fileOf(t)).catch(() => {}); else if (!netOff()) tempLink(fileOf(t)).catch(() => {}); }
 let preRandom = null;
 function playBtn(items) {
   return h('button', { class: 'pill primary', html: ic('play', 18) + 'Riproduci', onpointerdown: () => warm(LIB.tracks.get(items[0])), onclick: () => playQueue(items, 0, false) });
@@ -1269,7 +1287,8 @@ function shuffleBtn(items) {
     onclick: () => { const i = preRandom && preRandom.items === items ? preRandom.i : null; preRandom = null; playQueue(items, i, true); } });
 }
 async function prefetchLinks(paths) {
-  const todo = [...new Set(paths)].filter(p => p && !freshLink(p)); let i = 0;
+  if (netOff()) return;
+  const todo = [...new Set(paths)].filter(p => p && !freshLink(p) && !offHas(p)); let i = 0;     // i brani scaricati non servono link
   const worker = async () => { while (i < todo.length) { const p = todo[i++]; try { await tempLink(p); } catch (e) {} } };
   await Promise.all([worker(), worker(), worker()]);
 }
@@ -1716,6 +1735,7 @@ function finishCurrent(t, raw, t0) {
   const blob = new Blob([raw], { type: MIME[t.ext] || 'application/octet-stream' });
   if (curBlob) URL.revokeObjectURL(curBlob.url);
   curBlob = { file: f, url: URL.createObjectURL(blob), blob };
+  if (OFF.q.includes(offKey(f))) offAdopt(f, blob);
   const sec = (performance.now() - t0) / 1000; if (sec > 0.5) dlRate = raw.size / sec;
   log(`⬇ In memoria anche «${trackInfo(t).title}» (spostamenti precisi) · ${mb(raw.size)} in ${sec.toFixed(1)} s`);
   if (seekWait) { const w = seekWait; seekWait = null; if (canPrecise()) preciseSeek(w.x); else safariSeek(w.x); }
@@ -1780,7 +1800,7 @@ function gapTick() {                         // dal timeupdate: negli ultimi 4 s
   if (!mode) { if (rem < 0.8 && gapMiss !== c.nf) { gapMiss = c.nf; log('Senza pause: il brano successivo non è ancora in memoria, passaggio normale'); } return; }
   if (mode === 'memoria' && SP.blob !== pre.url) {
     spare.preload = 'auto'; setSrcOn(spare, pre.url); try { spare.load(); } catch (e) {}
-    SP = { file: c.nf, t0: performance.now(), blob: pre.url, blobObj: pre.blob };
+    SP = { file: c.nf, t0: performance.now(), blob: pre.url, blobObj: pre.blob, local: !!pre.local };
   }
   attachEl(spare); setElGain(spare, c.nt);
   GP = Object.assign(c, { el: spare, mode, state: 'armed', timer: null });
@@ -1854,11 +1874,12 @@ function gapCommit(g) {
   const oldBlob = curBlob, oldSrc = old.getAttribute('src');
   curBlob = g.mode === 'memoria' ? { file: g.nf, url: SP.blob, blob: SP.blobObj } : null;
   if (g.mode === 'memoria' && PRE && PRE.url === SP.blob) PRE = null;
+  const fromOff = g.mode === 'memoria' && SP.local;
   SP = { file: null, t0: 0 };
   GP = null;
   Q.pos = g.n; announced = null; loadedFile = g.nf; srcPlayingAt = Date.now(); pendingSeek = 0; pendingAuto = null;
   if (g.hidden !== isHidden()) log('(lo schermo è cambiato durante il passaggio)');
-  log(`⏭ Senza pause → «${trackInfo(curTrack()).title}» · ${g.mode === 'memoria' ? 'dalla memoria' : 'dal lettore di riserva'} · avvio ${Math.round(lat)} ms${isHidden() ? ' · schermo spento' : ''}${RG.on ? ' · volume ' + rgDesc(curTrack()) : ''}`);
+  log(`⏭ Senza pause → «${trackInfo(curTrack()).title}» · ${fromOff ? 'dal brano scaricato' : g.mode === 'memoria' ? 'dalla memoria' : 'dal lettore di riserva'} · avvio ${Math.round(lat)} ms${isHidden() ? ' · schermo spento' : ''}${RG.on ? ' · volume ' + rgDesc(curTrack()) : ''}`);
   gapMeasure(g);
   setTimeout(() => {                         // il lettore del brano finito si svuota appena ha finito
     if (!g.endedAt) g.measured = true;       // misura valida solo se il brano finisce subito (il lettore viene poi riusato)
@@ -1887,8 +1908,15 @@ function doPlay() {
 }
 function playQueue(items, startIdx, shuffle = Q.shuffle) {
   if (!items.length) return;
+  let start0 = startIdx;
+  if (navOff()) {                    // senza rete: parto da un brano scaricato
+    const ok = items.map((k, i) => offTrackOk(k) ? i : -1).filter(i => i >= 0);
+    if (!ok.length) { toast('Senza rete: questi brani non sono scaricati'); return; }
+    if (start0 == null) start0 = ok[Math.floor(Math.random() * ok.length)];
+    else if (!ok.includes(start0)) { start0 = ok.find(i => i > start0); if (start0 == null) start0 = ok[0]; toast('Senza rete: parto dal primo brano scaricato'); }
+  }
   Q.items = items.slice(); Q.shuffle = !!shuffle; Q.contAt = null; retried.clear();
-  const n = items.length, start = startIdx == null ? Math.floor(Math.random() * n) : startIdx;
+  const n = items.length, start = start0 == null ? Math.floor(Math.random() * n) : start0;
   if (Q.shuffle) { Q.order = [start, ...shuffleArr([...Array(n).keys()].filter(i => i !== start))]; Q.pos = 0; }
   else { Q.order = [...Array(n).keys()]; Q.pos = start; }
   pendingAuto = null;
@@ -1938,8 +1966,10 @@ function dropPre() {
 }
 function maybePreload() {
   const t = curTrack(); if (!t) return;
-  const nt = preloadOn() ? nextTrack() : null, nf = nt ? fileOf(nt) : null;
+  const n0 = nextTrack(), local = !!n0 && fileOf(n0) !== fileOf(t) && offHas(fileOf(n0)) && !noPre.has(fileOf(n0));   // il successivo è scaricato: lo preparo dal telefono
+  const nt = preloadOn() || local ? n0 : null, nf = nt ? fileOf(nt) : null;
   if (PRE && PRE.file !== nf) dropPre();                       // coda cambiata o precarico spento
+  if (local) { if (!PRE && !(curBlob && curBlob.file === nf)) startLocalPre(nt, nf); return; }
   if (CURDL) return;                                            // prima finisco di scaricare il brano in corso
   if (!nt || PRE || !linked() || nf === fileOf(t) || noPre.has(nf) || (curBlob && curBlob.file === nf)) return;
   if (!curBlob && (!srcPlayingAt || Date.now() - srcPlayingAt < PRE_DELAY)) return;
@@ -1957,6 +1987,7 @@ function preloadForAlbum(al) {
   if (!al || !preloadOn() || !linked() || !audio.paused) return;
   const t = LIB.tracks.get(al.tracks[0]); if (!t) return;
   const f = fileOf(t);
+  if (offHas(f)) { offBlob(f).catch(() => {}); return; }             // scaricato: parte dal telefono, niente rete
   if (loadedFile !== f) loadSpare(t);
   if ((PRE && PRE.file === f) || (curBlob && curBlob.file === f) || noPre.has(f)) return;
   const size = fileSize(f); if (!size || size > PRE_MAX) return;
@@ -1988,6 +2019,7 @@ async function startPreload(nt, nf, kind, album) {
     p.blob = new Blob([raw], { type: MIME[nt.ext] || 'application/octet-stream' });
     p.url = URL.createObjectURL(p.blob);
     p.ready = true; p.ctrl = null; if (p.onready) p.onready();
+    if (OFF.q.includes(offKey(nf))) offAdopt(nf, p.blob);          // da tenere sul telefono: lo salvo senza riscaricarlo
     const sec = (performance.now() - p.t0) / 1000; if (sec > 0.5) dlRate = raw.size / sec;
     log(`⬇ Precaricato «${trackInfo(nt).title}»${kind === 'album' ? ' (primo brano dell\'album)' : ''} · ${mb(raw.size)} in ${sec.toFixed(1)} s (${(raw.size / 1048576 / sec).toFixed(1)} MB/s)`);
   } catch (e) {
@@ -1996,6 +2028,338 @@ async function startPreload(nt, nf, kind, album) {
     if (PRE === p) { PRE = null; if (e.name !== 'AbortError') { log('Precarico non riuscito: ' + e.message); noPre.add(nf); } }
   }
 }
+/* ---------------- brani scaricati: ascolto senza rete (v1.52) ----------------
+   Solo ciò che scegli tu (album, playlist, singoli brani) resta sul telefono, nella memoria di Basalto (non nell'app File),
+   identico all'originale su Dropbox: lo stesso file FLAC, nessuna conversione. Lo streaming resta il modo normale.
+   - I file si salvano a pezzi da 8 MB (IndexedDB): un download interrotto riparte da dove era arrivato e il telefono
+     non tiene mai in memoria un file intero mentre scarica.
+   - Per suonarli i pezzi si uniscono in un Blob che rimanda ai file sul disco (nessuna copia in memoria): partenza
+     immediata, spostamenti esatti e passaggi senza pause come per i brani precaricati. Con la rete o senza.
+   - Album e playlist scaricati restano allineati: i brani aggiunti si scaricano, quelli tolti si cancellano.
+   - I download non disturbano l'ascolto: si fermano mentre un brano in streaming parte o si sta scaricando in memoria. */
+const OFF_DB = 'basalto-offline';
+let OFF_PART = 8 * 1048576;                 // let: le prove la abbassano
+const OFF = { db: null, ready: null, meta: new Map(), blobs: new Map(), q: [], cur: null, run: false, err: '', timer: null, libOk: false, fails: 0, retry: null, paintT: null, doneN: 0 };
+let OFFP = (() => { const p = loadJSON(K.off) || {}; return { a: p.a || {}, p: p.p || {}, t: p.t || {} }; })();   // scelti da te: album, playlist, brani → quando
+const offKey = f => String(f || '').toLowerCase();
+const offMeta = f => OFF.meta.get(offKey(f));
+function offHas(f) { const m = f && offMeta(f); return !!(m && m.done); }
+function offTrackOk(k) { const t = LIB.tracks.get(k); return !!t && offHas(fileOf(t)); }
+function offStale(f) { const m = offMeta(f), e = IDX.files[offKey(f)]; return !!(m && m.done && e && m.rev && e[2] && e[2] !== m.rev); }   // il file su Dropbox è cambiato
+function offBytes(n) { return n >= 1e9 ? fmtBytes(n) : n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' kB'; }
+const idbDone = tx => new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = tx.onabort = () => rej(tx.error || new Error('archivio del telefono non scritto')); });
+const idbReq = rq => new Promise((res, rej) => { rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); });
+const offRange = f => IDBKeyRange.bound([f, 0], [f, Infinity]);
+function offOpen() {
+  if (OFF.ready) return OFF.ready;
+  OFF.ready = new Promise(res => {
+    let rq; try { rq = indexedDB.open(OFF_DB, 1); } catch (e) { res(null); return; }
+    rq.onupgradeneeded = () => { const db = rq.result; if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'f' }); if (!db.objectStoreNames.contains('parts')) db.createObjectStore('parts'); };
+    rq.onsuccess = () => { OFF.db = rq.result; res(OFF.db); };
+    rq.onerror = rq.onblocked = () => res(null);
+  });
+  return OFF.ready;
+}
+async function offLoad() {
+  const db = await offOpen(); if (!db) { log('Brani scaricati: archivio del telefono non disponibile'); return; }
+  const all = await idbReq(db.transaction('meta').objectStore('meta').getAll()).catch(() => []);
+  for (const m of all) OFF.meta.set(m.f, m);
+  const done = all.filter(m => m.done), was = parseInt(load(K.offN), 10) || 0;
+  OFF.doneN = done.length;
+  if (was > 0 && !done.length) log(`Brani scaricati: sul telefono non ci sono più (erano ${was} file; forse iOS ha liberato spazio) · li riscarico appena c'è rete`);
+  else if (done.length) log(`Brani scaricati: ${plural(done.length, 'file', 'file')} sul telefono · ${offBytes(done.reduce((n, m) => n + m.got, 0))}`);
+  store(K.offN, String(done.length));
+}
+function offCount() { OFF.doneN = [...OFF.meta.values()].filter(m => m.done).length; store(K.offN, String(OFF.doneN)); }
+async function offPutMeta(m) {
+  const tx = OFF.db.transaction('meta', 'readwrite'); tx.objectStore('meta').put(m); await idbDone(tx); OFF.meta.set(m.f, m);
+}
+async function offPutPart(m, blob) {
+  const nm = Object.assign({}, m, { n: m.n + 1, got: m.got + blob.size });
+  const tx = OFF.db.transaction(['parts', 'meta'], 'readwrite');
+  tx.objectStore('parts').put(blob, [m.f, m.n]); tx.objectStore('meta').put(nm);
+  await idbDone(tx); Object.assign(m, nm); OFF.meta.set(m.f, m);
+}
+async function offDelete(f) {
+  f = offKey(f); OFF.blobs.delete(f);
+  const db = await offOpen(); if (!db) return;
+  const tx = db.transaction(['meta', 'parts'], 'readwrite');
+  tx.objectStore('meta').delete(f); tx.objectStore('parts').delete(offRange(f));
+  await idbDone(tx).catch(e => log('Brani scaricati: cancellazione non riuscita (' + e.message + ')'));
+  OFF.meta.delete(f);
+}
+// il file scaricato, pronto per il lettore (rimanda ai pezzi sul disco: niente copia in memoria)
+async function offBlob(f) {
+  f = offKey(f); const c = OFF.blobs.get(f); if (c) return c;
+  const m = OFF.meta.get(f); if (!m || !m.done) return null;
+  const db = await offOpen(); if (!db) return null;
+  const parts = await idbReq(db.transaction('parts').objectStore('parts').getAll(offRange(f)));
+  const b = new Blob(parts, { type: MIME[m.ext] || 'application/octet-stream' });
+  if (parts.length !== m.n || b.size !== m.got) {
+    log(`Brani scaricati: «${f.split('/').pop()}» incompleto sul telefono (${parts.length}/${m.n} pezzi), lo riscarico`);
+    await offDelete(f); offCount(); offSoon(); return null;
+  }
+  OFF.blobs.set(f, b); if (OFF.blobs.size > 40) OFF.blobs.delete(OFF.blobs.keys().next().value);
+  return b;
+}
+function offSavePins() { saveJSON(K.off, OFFP); }
+// file (uno per brano; gli album in un unico file con .cue ne hanno uno solo) di un album, di una playlist o di un brano
+function offFilesOf(kind, id) {
+  let keys = [];
+  if (kind === 'a') { const al = LIB.albums.get(id); keys = al ? al.tracks : []; }
+  else if (kind === 'p') { const p = UD.pl[id]; keys = p && !p.del ? (p.items || []) : []; }
+  else keys = [id];
+  const out = new Map();
+  for (const k of keys) { const t = LIB.tracks.get(k); if (t) { const f = offKey(fileOf(t)); if (!out.has(f)) out.set(f, t); } }
+  return out;
+}
+function offWant() {        // tutto ciò che deve stare sul telefono, nell'ordine in cui l'hai scelto
+  const pins = [];
+  for (const kind of ['a', 'p', 't']) for (const [id, ts] of Object.entries(OFFP[kind])) pins.push([ts, kind, id]);
+  pins.sort((a, b) => a[0] - b[0]);
+  const w = new Map();
+  for (const [, kind, id] of pins) for (const [f, t] of offFilesOf(kind, id)) if (!w.has(f)) w.set(f, t);
+  return w;
+}
+function offStat(kind, id) {
+  const fs = offFilesOf(kind, id); let n = 0, done = 0, bytes = 0, have = 0;
+  for (const f of fs.keys()) {
+    const sz = fileSize(f) || (offMeta(f) || {}).size || 0; n++; bytes += sz;
+    if (offHas(f)) { done++; have += sz; }
+    else if (OFF.cur && OFF.cur.f === f) have += OFF.cur.got;
+    else have += (offMeta(f) || {}).got || 0;
+  }
+  const tracks = kind === 'a' ? (LIB.albums.get(id) || { tracks: [] }).tracks.length : kind === 'p' ? plTracks(UD.pl[id] || {}).length : 1;
+  return { n, done, bytes, have, tracks };
+}
+function offTotals() {
+  let bytes = 0, n = 0; for (const m of OFF.meta.values()) if (m.done) { bytes += m.got; n++; }
+  const want = offWant(); let left = 0, leftB = 0;
+  for (const f of want.keys()) if (!offHas(f)) { left++; leftB += Math.max(0, (fileSize(f) || 0) - ((OFF.cur && OFF.cur.f === f) ? OFF.cur.got : ((offMeta(f) || {}).got || 0))); }
+  return { bytes, n, left, leftB };
+}
+let offPersistAsked = false;
+function offPersist() {        // chiedo a iOS di non cancellare i download quando manca spazio (spesso risponde di no)
+  if (offPersistAsked || !navigator.storage || !navigator.storage.persist) return; offPersistAsked = true;
+  navigator.storage.persisted().then(p => p || navigator.storage.persist()).then(ok => log(`Brani scaricati: protezione dalla pulizia automatica ${ok ? 'concessa' : 'non concessa da iOS (le app sulla schermata Home non vengono comunque svuotate dopo 7 giorni)'}`)).catch(() => {});
+}
+function offToggle(kind, id, label) {
+  if (OFFP[kind][id]) {
+    const s = offStat(kind, id);
+    if (!confirm(`Togliere «${label}» dai brani scaricati?${s.have ? ' Liberi ' + offBytes(s.have) + ' sul telefono.' : ''} Resta ascoltabile in streaming.`)) return;
+    delete OFFP[kind][id]; offSavePins(); log(`Brani scaricati: tolto «${label}»`); toast('Tolto dai brani scaricati');
+    offSync(true);
+  } else {
+    OFFP[kind][id] = Date.now(); offSavePins();
+    const s = offStat(kind, id);
+    log(`Brani scaricati: aggiunto «${label}» (${plural(s.tracks, 'brano', 'brani')}, ${offBytes(s.bytes)})`);
+    toast(s.n && s.done === s.n ? 'Già sul telefono: ascoltabile senza rete' : navOff() ? 'Si scaricherà appena c\'è rete' : `Download avviato · ${offBytes(Math.max(0, s.bytes - s.have))}`);
+    offPersist(); offSync(false);
+  }
+  offPaint(true);
+}
+function offSoon(ms = 1500) { clearTimeout(OFF.timer); OFF.timer = setTimeout(() => offSync(false), ms); }
+const offInUse = f => [loadedFile, PRE && PRE.file, SP.file, CURDL && CURDL.file].some(x => x && offKey(x) === f);
+// allinea il telefono con le tue scelte: cancella ciò che non serve più, mette in coda ciò che manca
+let offSyncing = false;
+async function offSync(explicit) {
+  await offOpen(); if (!OFF.db || !LIB.tracks.size || offSyncing) { if (offSyncing) offSoon(800); return; }
+  offSyncing = true;
+  try {
+    for (const id of Object.keys(OFFP.p)) if (!UD.pl[id] || UD.pl[id].del) { delete OFFP.p[id]; offSavePins(); }   // playlist eliminata
+    const want = offWant();
+    // cancello solo con la libreria aggiornata in questa apertura (o se l'hai chiesto tu): mai per una libreria vuota o vecchia
+    if (explicit || OFF.libOk) {
+      let freed = 0, nDel = 0;
+      for (const [f, m] of [...OFF.meta]) {
+        if (want.has(f)) continue;
+        if (offInUse(f)) { offSoon(20000); continue; }
+        if (OFF.cur && OFF.cur.f === f) { OFF.cur.drop = true; try { OFF.cur.ctrl.abort(); } catch (e) {} continue; }
+        freed += m.got || 0; nDel++; await offDelete(f);
+      }
+      if (nDel) { offCount(); log(`Brani scaricati: ${plural(nDel, 'file cancellato', 'file cancellati')} dal telefono · liberati ${offBytes(freed)}`); }
+    }
+    OFF.q = [...want.keys()].filter(f => !offHas(f) || (offStale(f) && !offInUse(f)));
+  } finally { offSyncing = false; }
+  offPaint(true);
+  offRun();
+}
+// download in corso: aspetto se la rete serve alla musica
+function offBusyWhy() {
+  if (startMeas && performance.now() - startMeas.t0 < 15000) return 'partenza di un brano';
+  if (seekWait) return 'spostamento';
+  const t = curTrack();
+  if (t && !audio.paused && loadedFile === fileOf(t) && !curBlob) {          // brano in streaming
+    if (!srcPlayingAt || Date.now() - srcPlayingAt < 5000) return 'partenza di un brano';
+    if (CURDL) return 'brano in ascolto';
+  }
+  if (PRE && !PRE.ready && !PRE.local && performance.now() - PRE.t0 < 60000) return 'precarico';
+  return '';
+}
+async function offIdle(maxMs) {
+  const t0 = Date.now();
+  while (offBusyWhy()) { if (maxMs && Date.now() - t0 > maxMs) return false; if (OFF.cur) OFF.cur.wait = offBusyWhy(); offPaintSoon(); await sleep(400); }
+  if (OFF.cur) OFF.cur.wait = '';
+  return true;
+}
+async function offRun() {
+  if (OFF.run) return;
+  OFF.run = true; let net = false;
+  try {
+    while (OFF.q.length) {
+      if (navOff() || !linked()) { net = true; break; }
+      const f = OFF.q[0], want = offWant();
+      if (!want.has(f) || (offHas(f) && !offStale(f))) { OFF.q.shift(); continue; }
+      await offIdle();
+      try {
+        const ok = await offFetch(f, want.get(f));
+        if (ok) { OFF.q.shift(); OFF.fails = 0; OFF.err = ''; }
+      } catch (e) {
+        const cur = OFF.cur; OFF.cur = null;
+        if (cur && cur.drop) { OFF.q.shift(); await offDelete(f); continue; }          // tolto mentre si scaricava
+        if (e && (e.name === 'QuotaExceededError' || /quota/i.test(e.message || ''))) {
+          OFF.err = 'spazio esaurito sul telefono'; log('Brani scaricati: spazio esaurito sul telefono, download fermati'); toast('Spazio esaurito: download fermati'); break;
+        }
+        if (e instanceof NeedLogin) { OFF.err = 'Dropbox da ricollegare'; break; }
+        if (e instanceof TypeError || (e && e.name === 'AbortError')) { net = true; log(`Brani scaricati: download interrotto (${e.name === 'AbortError' ? 'rete ferma' : 'rete assente o instabile'}), riprende da dove era arrivato`); break; }
+        OFF.err = e.message; OFF.fails++;
+        log(`Brani scaricati: «${f.split('/').pop()}» non riuscito (${e.message})`);
+        OFF.q.push(OFF.q.shift());
+        if (OFF.fails >= 3) break;
+        await sleep(2000);
+      }
+    }
+  } finally { OFF.run = false; OFF.cur = null; offPaint(true); }
+  clearTimeout(OFF.retry);
+  if (net || OFF.fails) OFF.retry = setTimeout(() => { OFF.fails = 0; offSync(false); }, net ? 30000 : 120000);   // senza rete o dopo errori: riprovo più tardi
+}
+async function offFetch(f, t) {
+  const e = IDX.files[f], size = e ? e[1] : 0, rev = e ? e[2] : '';
+  let m = offMeta(f);
+  if (m && (m.done ? offStale(f) : ((rev && m.rev !== rev) || m.size !== size))) { await offDelete(f); m = null; }
+  if (m && m.done) return true;
+  if (!m) { m = { f, rev, size, ext: t.ext, got: 0, n: 0, done: false, at: Date.now() }; await offPutMeta(m); }
+  const title = trackInfo(t).title, from = m.got;
+  const cur = OFF.cur = { f, got: m.got, size, t0: performance.now(), ctrl: new AbortController(), title, wait: '' };
+  offPaintSoon();
+  let r;
+  for (let i = 0; i < 2; i++) {
+    const tok = await getToken();
+    r = await fetch(CONTENT + 'files/download', { method: 'POST', signal: cur.ctrl.signal, headers: Object.assign({ 'Authorization': 'Bearer ' + tok, 'Dropbox-API-Arg': hdrJson({ path: f }) }, m.got ? { 'Range': `bytes=${m.got}-` } : {}) });
+    if (r.status === 401 && i === 0) { accessToken = null; continue; }
+    break;
+  }
+  if (!r.ok) throw new Error('Dropbox ' + r.status);
+  if (m.got && r.status !== 206) { try { cur.ctrl.abort(); } catch (x) {} await offDelete(f); throw new Error('ripresa non riuscita, riparto da capo'); }
+  const reader = r.body.getReader(); let buf = [], bl = 0, paused = false;
+  const flush = async () => { if (!bl) return; const b = new Blob(buf); buf = []; bl = 0; await offPutPart(m, b); };
+  for (;;) {
+    if (offBusyWhy() && !(await offIdle(15000))) { paused = true; break; }      // la musica ha bisogno della rete per più di 15 s: riprendo dopo
+    const { done, value } = await reader.read(); if (done) break;
+    buf.push(value); bl += value.length; cur.got += value.length; offPaintSoon();
+    if (bl >= OFF_PART) await flush();
+  }
+  if (paused) { try { cur.ctrl.abort(); } catch (x) {} await flush(); OFF.cur = null; log(`Brani scaricati: «${title}» in pausa a ${mb(m.got)} (la rete serve alla musica)`); return false; }
+  await flush();
+  if (size && m.got !== size) { await offDelete(f); throw new Error(`file incompleto (${m.got} byte su ${size})`); }
+  m.done = true; m.at = Date.now(); await offPutMeta(m); offCount();
+  const sec = (performance.now() - cur.t0) / 1000, got = m.got - from;
+  log(`⬇ Scaricato per l'ascolto senza rete: «${title}» · ${mb(m.got)}${from ? ` (ripreso da ${mb(from)})` : ''} in ${sec.toFixed(1)} s${sec > 0.5 ? ` (${(got / 1048576 / sec).toFixed(1)} MB/s)` : ''}`);
+  OFF.cur = null; offPaint(true);
+  return true;
+}
+// brano già arrivato in memoria (precarico o brano in ascolto) e da tenere sul telefono: lo salvo senza riscaricarlo
+async function offAdopt(file, blob) {
+  const f = offKey(file);
+  try {
+    await offOpen(); if (!OFF.db || offHas(f) || (OFF.cur && OFF.cur.f === f) || !offWant().has(f)) return;
+    const e = IDX.files[f]; if (!e || blob.size !== e[1]) return;
+    const t = offWant().get(f);
+    if (offMeta(f)) await offDelete(f);
+    const m = { f, rev: e[2], size: e[1], ext: t.ext, got: 0, n: 0, done: false, at: Date.now() };
+    await offPutMeta(m);
+    for (let o = 0; o < blob.size; o += OFF_PART) await offPutPart(m, blob.slice(o, o + OFF_PART));
+    m.done = true; await offPutMeta(m); offCount();
+    OFF.q = OFF.q.filter(x => x !== f);
+    log(`⬇ Salvato per l'ascolto senza rete: «${trackInfo(t).title}» · ${mb(blob.size)} (era già in memoria, nessun nuovo download)`);
+    offPaint(true);
+  } catch (err) { log('Brani scaricati: salvataggio dalla memoria non riuscito (' + err.message + ')'); }
+}
+// precarico del brano successivo dal telefono (immediato, niente rete)
+function startLocalPre(nt, nf) {
+  const p = PRE = { file: nf, kind: 'scaricato', local: true, ctrl: null, url: null, blob: null, ready: false, t0: performance.now(), got: 0, size: fileSize(nf) };
+  offBlob(nf).then(b => {
+    if (PRE !== p) return;
+    if (!b) { PRE = null; return; }
+    p.blob = b; p.url = URL.createObjectURL(b); p.got = p.size = b.size; p.ready = true; if (p.onready) p.onready();
+  }).catch(e => { if (PRE === p) PRE = null; log('Brano scaricato non letto: ' + e.message); });
+}
+// interfaccia: righe «Scarica», segni sui brani, riepiloghi (aggiornati mentre scarica)
+function offPaintSoon() { if (!OFF.paintT) OFF.paintT = setTimeout(() => { OFF.paintT = null; offPaint(false); }, 400); }
+function offPaint(full) {
+  document.querySelectorAll('[data-offrow]').forEach(paintOffRow);
+  document.querySelectorAll('[data-offsum]').forEach(paintOffSum);
+  if (!full) return;
+  document.querySelectorAll('[data-offtm]').forEach(b => { const t = LIB.tracks.get(b.dataset.offtm); if (t) b.replaceChildren(...offTrackMenuKids(t)); });
+  offPaintRows();
+}
+function offPaintRows() {
+  const off = navOff();
+  document.querySelectorAll('.track[data-lower]').forEach(r => {
+    const t = LIB.tracks.get(r.dataset.lower); if (!t) return;
+    const has = offHas(fileOf(t)), o = r.querySelector('.o');
+    if (o && !!o.firstChild !== has) o.innerHTML = has ? ic('dlOn', 15) : '';
+    r.classList.toggle('na', off && !has);
+  });
+  document.querySelectorAll('.card[data-album]').forEach(c => { const al = LIB.albums.get(c.dataset.album); c.classList.toggle('na', off && !!al && !al.tracks.some(offTrackOk)); });
+}
+function offRowState(kind, id) {
+  const on = !!OFFP[kind][id], s = offStat(kind, id), pct = s.bytes ? Math.min(99, Math.floor(s.have / s.bytes * 100)) : 0;
+  const unit = s.n === s.tracks ? ['brano', 'brani'] : ['file', 'file'];
+  if (!on) return { icon: 'dl', t1: kind === 'p' ? 'Scarica la playlist' : kind === 'a' ? 'Scarica l\'album' : 'Scarica il brano', t2: `Per ascoltarlo senza rete · ${plural(s.tracks, 'brano', 'brani')} · ${offBytes(s.bytes)}${kind === 'p' ? ' · anche quelli che aggiungerai' : ''}` };
+  if (s.n && s.done === s.n) return { icon: 'dlOn', t1: 'Scaricato', t2: `Ascoltabile senza rete · ${offBytes(s.bytes)}${kind === 'p' ? ' · i brani che aggiungi si scaricano da soli' : ''}`, done: true };
+  const cur = OFF.cur && offFilesOf(kind, id).has(OFF.cur.f) ? OFF.cur : null;
+  const t1 = navOff() ? 'In attesa della rete' : OFF.err && !OFF.run ? 'Download fermo: ' + OFF.err : cur && cur.wait ? 'Download in pausa (la rete serve alla musica)' : 'Download in corso';
+  return { icon: 'dl', t1, t2: `${s.done} di ${plural(s.n, unit[0], unit[1])} · ${pct}% · ${offBytes(s.have)} di ${offBytes(s.bytes)}`, busy: true };
+}
+function offRow(kind, id, label) {
+  const b = h('button', { class: 'item offrow', 'data-offrow': kind + '|' + id, onclick: () => offToggle(kind, id, label) });
+  paintOffRow(b); return b;
+}
+function paintOffRow(b) {
+  const [kind, id] = [b.dataset.offrow.slice(0, 1), b.dataset.offrow.slice(2)];
+  const st = offRowState(kind, id), key = [st.icon, st.t1, st.t2].join('|');
+  if (b._k === key) return; b._k = key;
+  b.setAttribute('aria-label', st.t1 + (st.done || st.busy ? ' · tocca per togliere dai brani scaricati' : ''));
+  b.replaceChildren(...[h('span', { class: 'icobox', html: ic(st.icon, 22) }), h('span', { class: 'txt' }, h('span', { class: 't1' }, st.t1), h('span', { class: 't2' }, st.t2)),
+    st.done || st.busy ? h('span', { class: 'mut', html: ic('x', 18), style: 'display:flex' }) : null].filter(Boolean));
+}
+function offSumText() {
+  const T = offTotals();
+  if (!T.n && !T.left) return 'Nessuno: scarica album, playlist o brani per ascoltarli senza rete';
+  const a = `${plural(T.n, 'file', 'file')} · ${offBytes(T.bytes)}`;
+  if (!T.left) return a;
+  const st = navOff() ? 'in attesa della rete' : OFF.err && !OFF.run ? 'fermi: ' + OFF.err : OFF.cur && OFF.cur.wait ? 'in pausa mentre suona la musica' : `in corso «${OFF.cur ? OFF.cur.title : '…'}»${OFF.cur && OFF.cur.size ? ' ' + Math.floor(OFF.cur.got / OFF.cur.size * 100) + '%' : ''}`;
+  return `${a} · ancora ${plural(T.left, 'file', 'file')} (${offBytes(T.leftB)}): ${st}`;
+}
+function paintOffSum(e) { const t = offSumText(); if (e.textContent !== t) e.textContent = t; }
+function offTrackMenuKids(t) {
+  const f = fileOf(t), pin = !!OFFP.t[t.lower], has = offHas(f);
+  if (pin) return [h('span', { class: 'si', html: ic(has ? 'dlOn' : 'dl', 22) }), h('span', null, has ? 'Scaricato · togli dai brani scaricati' : 'In download · annulla')];
+  if (has) return [h('span', { class: 'si', html: ic('dlOn', 22) }), h('span', null, 'Scaricato con l\'album o una playlist')];
+  return [h('span', { class: 'si', html: ic('dl', 22) }), h('span', null, `Scarica per ascoltarlo senza rete · ${offBytes(fileSize(f))}`)];
+}
+function offTrackMenu(t) {
+  const pin = !!OFFP.t[t.lower], has = offHas(fileOf(t));
+  return h('button', { class: 'sa', 'data-offtm': t.lower, onclick: () => { if (!pin && has) return; closeSheet(); offToggle('t', t.lower, trackInfo(t).title); } }, ...offTrackMenuKids(t));
+}
+function offNetChanged(on) {
+  if (on) { NET.downAt = 0; log('Rete tornata'); offSoon(1000); if (linked()) { syncIndex(); setTimeout(syncUD, 1500); } }
+  else { log('Senza rete: suonano i brani scaricati'); if (OFF.cur) { try { OFF.cur.ctrl.abort(); } catch (e) {} } }
+  refreshViews();
+}
+addEventListener('online', () => offNetChanged(true));
+addEventListener('offline', () => offNetChanged(false));
 // Misura dell'avvio di ogni brano (per capire dove si perde tempo)
 let startMeas = null;                   // { file, t0, from, link, linkMs, metaMs }
 const HDR = new Map();                  // dimensione dell'intestazione FLAC (metadati + copertine) prima dell'audio
@@ -2020,7 +2384,7 @@ function measureStarted(t) {
   startMeas = null;
   const total = (performance.now() - m.t0) / 1000, q = trackInfo(t).quality;
   const RS = ['nessun dato', 'metadati', 'dati attuali', 'dati futuri', 'dati sufficienti'];
-  const det = m.from === 'memoria' ? 'dalla memoria' : m.from === 'riserva' ? `dal lettore di riserva (era a «${RS[m.ready] || m.ready}»)` : `streaming (link ${m.link}${m.linkMs != null ? ' ' + (m.linkMs / 1000).toFixed(1) + ' s' : ''}${m.metaMs != null ? ' · metadati ' + (m.metaMs / 1000).toFixed(1) + ' s' : ''})`;
+  const det = m.from === 'memoria' ? 'dalla memoria' : m.from === 'scaricato' ? 'dal brano scaricato sul telefono' : m.from === 'riserva' ? `dal lettore di riserva (era a «${RS[m.ready] || m.ready}»)` : `streaming (link ${m.link}${m.linkMs != null ? ' ' + (m.linkMs / 1000).toFixed(1) + ' s' : ''}${m.metaMs != null ? ' · metadati ' + (m.metaMs / 1000).toFixed(1) + ' s' : ''})`;
   log(`⏱ Partito in ${total.toFixed(1)} s · ${det}${q ? ' · ' + q : ''}${RG.on ? ' · volume ' + rgDesc(t) : ''}`);
   if (m.from === 'streaming' && t.ext === 'flac')
     flacHeaderSize(m.file).then(hb => { if (hb >= 524288) log(`   ↳ prima dell'audio il file ha ${mb(hb)} di intestazione (copertina incorporata): rallenta la partenza`); }).catch(() => {});
@@ -2049,13 +2413,21 @@ function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
     };
     const pre = PRE && PRE.file === f ? PRE : null;
     const spareOk = autoplay && !autoNext && !isHidden() && !airOn() && SP.file === f && spare.getAttribute('src') && !spare.error && !(pre && pre.ready);
-    if (spareOk) {                                     // lettore di riserva già pronto: parte subito
+    if (!(pre && pre.ready) && offHas(f) && !noPre.has(f)) {          // v1.52 · brano scaricato: dal telefono, niente rete
+      if (pre) dropPre();
+      if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'scaricato' };
+      const useB = b => { const u = URL.createObjectURL(b); go(u, { file: f, url: u, blob: b }); };
+      const ob = OFF.blobs.get(offKey(f));
+      if (ob) useB(ob);
+      else offBlob(f).then(b => { if (lpTok !== myTok || curTrack() !== t) return; if (b) useB(b); else loadAndPlay(Q.pos, startAt, autoplay, true); })
+        .catch(e => { log('Brano scaricato non letto: ' + e.message); if (lpTok === myTok && curTrack() === t) { noPre.add(f); loadAndPlay(Q.pos, startAt, autoplay, true); } });
+    } else if (spareOk) {                                     // lettore di riserva già pronto: parte subito
       if (pre && !pre.ready && !isHidden() && t.ext === 'flac' && pseekOn()) adoptPre(pre, t); else if (pre) dropPre();
       if (autoplay && PRE && PRE.file !== f && !PRE.ready && preEta(PRE) > 3) { log(`Avvio: fermo il precarico di un altro brano, la rete serve allo streaming`); dropPre(); }
       if (autoplay && !CURDL && !isHidden()) fcWanted = f;
       swapToSpare(f, target, autoplay);           // il download in memoria parte da solo 1,5 s dopo la musica (maybeFetchCurrent)
     } else if (pre && pre.ready && !noPre.has(f)) {          // dalla memoria: niente rete
-      PRE = null; if (autoplay) startMeas = { file: f, t0: startMeas && startMeas.file === f && startMeas.waited ? startMeas.t0 : performance.now(), from: 'memoria' };
+      PRE = null; if (autoplay) startMeas = { file: f, t0: startMeas && startMeas.file === f && startMeas.waited ? startMeas.t0 : performance.now(), from: pre.local ? 'scaricato' : 'memoria' };
       go(pre.url, { file: f, url: pre.url, blob: pre.blob });
     } else if (force && curBlob && curBlob.file === f && curBlob.blob && !noPre.has(f)) {   // ricarico lo stesso brano già in memoria (equalizzatore, errore…)
       if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'memoria' };
@@ -2080,7 +2452,17 @@ function loadAndPlay(pos, startAt = 0, autoplay = true, force = false) {
       const link = freshLink(f);
       if (autoplay) startMeas = { file: f, t0: performance.now(), from: 'streaming', link: link ? 'pronto' : 'nuovo' };
       if (link) go(link);    // percorso sincrono: indispensabile per iOS a schermo spento
-      else tempLink(f).then(l => { if (curTrack() === t) { if (startMeas && startMeas.file === f) startMeas.linkMs = performance.now() - startMeas.t0; go(l); } }).catch(e => { log('Link non disponibile: ' + e.message); toast('Brano non raggiungibile'); });
+      else tempLink(f).then(l => { delete t._netRetry; if (curTrack() === t) { if (startMeas && startMeas.file === f) startMeas.linkMs = performance.now() - startMeas.t0; go(l); } }).catch(e => {
+        if (curTrack() !== t) return;
+        if (!(e instanceof TypeError) && !netOff()) { log('Link non disponibile: ' + e.message); toast('Brano non raggiungibile'); return; }
+        if (navigator.onLine !== false && !t._netRetry) {          // un errore isolato (iOS appena tornato in primo piano): riprovo una volta
+          t._netRetry = true; setTimeout(() => { if (curTrack() === t && lpTok === myTok) loadAndPlay(Q.pos, startAt, autoplay, force); }, 1500); return;
+        }
+        delete t._netRetry; startMeas = null;
+        const n = nextIndex();      // senza rete: salto al prossimo brano scaricato della coda
+        log(`Senza rete: «${trackInfo(t).title}» non è scaricato${autoplay && n >= 0 && n !== Q.pos ? ', passo al prossimo brano scaricato' : ''}`);
+        if (autoplay && n >= 0 && n !== Q.pos) loadAndPlay(n); else { toast('Senza rete: questo brano non è scaricato'); setPP(); }
+      });
     }
   }
   updateNowPlaying(); ensureAhead(); saveResume(true);
@@ -2091,11 +2473,20 @@ function ensureAhead() {
   for (let k = 1; k <= 2; k++) {
     let p = Q.pos + k;
     if (p >= Q.order.length) { if (Q.repeat !== 'all') break; p %= Q.order.length; }
-    const t = LIB.tracks.get(Q.items[Q.order[p]]); if (t) ahead.push(fileOf(t));
+    const t = LIB.tracks.get(Q.items[Q.order[p]]); if (!t) continue;
+    if (offHas(fileOf(t))) offBlob(fileOf(t)).catch(() => {}); else ahead.push(fileOf(t));     // scaricati: pronti dal telefono
   }
-  prefetchLinks(ahead);
+  if (!netOff()) prefetchLinks(ahead);
 }
-function nextIndex() { if (Q.pos + 1 < Q.order.length) return Q.pos + 1; return Q.repeat === 'all' ? 0 : -1; }
+function nextIndex() {             // senza rete salto i brani non scaricati
+  const n = Q.order.length; let p = Q.pos;
+  for (let i = 0; i < n; i++) {
+    p = p + 1 < n ? p + 1 : Q.repeat === 'all' ? 0 : -1;
+    if (p < 0) return -1;
+    if (!netOff() || offTrackOk(Q.items[Q.order[p]])) return p;
+  }
+  return -1;
+}
 function next() { pendingAuto = null; const n = nextIndex(); if (n >= 0) loadAndPlay(n); }
 function prev() {
   pendingAuto = null;
@@ -2230,7 +2621,7 @@ function bindAudio(el) {
     const why = { 1: 'interrotto', 2: 'errore di rete', 3: 'errore di decodifica', 4: 'formato non supportato o link scaduto' }[code] || 'sconosciuto';
     log(`Errore sul brano «${t ? t.name : '?'}»: ${why}`);
     if (audio.getAttribute('src').startsWith('blob:') && t) {
-      log('Il brano precaricato non si apre: passo allo streaming');
+      log(offHas(fileOf(t)) ? 'Il brano scaricato non si apre: passo allo streaming' : 'Il brano precaricato non si apre: passo allo streaming');
       noPre.add(fileOf(t)); if (curBlob) { URL.revokeObjectURL(curBlob.url); curBlob = null; }
       loadAndPlay(Q.pos, relTime(), true, true); return;
     }
@@ -2253,6 +2644,7 @@ document.addEventListener('visibilitychange', () => {
   if (!isHidden()) { prepareSpare(); fixApprox('allo schermo riacceso'); swapToMemory('schermo riacceso'); }     // riacceso lo schermo, preparo subito il successivo
   if (!isHidden() && linked() && Date.now() - udLastSync > 60000) syncUD();     // modifiche fatte su un altro dispositivo
   if (!isHidden()) checkUpdate();                                              // l'app tornata in primo piano: c'è una versione nuova?
+  if (!isHidden() && OFF.q.length && !OFF.run) offSoon(1000);                  // download rimasti a metà: riprendono
   if (isHidden() && udDirty && canWrite()) syncUD();
   if (!isHidden() && pendingAuto) setTimeout(() => { if (pendingAuto && audio.paused) { log('✗ A schermo spento la musica si è fermata a fine brano'); pendingAuto = null; } }, 2000);
 });
@@ -2280,9 +2672,11 @@ function restoreResumeIfNeeded() {
   const t = curTrack();
   pendingSeek = trackStart(t) + (r.t || 0);
   updateNowPlaying(); updateModes();
-  tempLink(fileOf(t)).then(l => { if (curTrack() === t && !audio.getAttribute('src')) { audio.preload = 'metadata'; setSrc(l); setElGain(audio, t); loadedFile = fileOf(t); pendingSeek = trackStart(t) + (r.t || 0); } }).catch(() => {});
-  log(`Ripresa: «${trackInfo(t).title}» da ${fmtTime(r.t || 0)}`);
-  if (preloadOn() && (r.t || 0) > 0.5) fetchCurrent(t);
+  const rf = fileOf(t);
+  if (offHas(rf)) offBlob(rf).catch(() => {});     // scaricato: al ▶ parte dal telefono nel punto esatto (anche senza rete)
+  else tempLink(rf).then(l => { if (curTrack() === t && !audio.getAttribute('src')) { audio.preload = 'metadata'; setSrc(l); setElGain(audio, t); loadedFile = fileOf(t); pendingSeek = trackStart(t) + (r.t || 0); } }).catch(() => {});
+  log(`Ripresa: «${trackInfo(t).title}» da ${fmtTime(r.t || 0)}${offHas(rf) ? ' (brano scaricato)' : ''}`);
+  if (preloadOn() && (r.t || 0) > 0.5 && !offHas(rf)) fetchCurrent(t);
 }
 
 /* ---------------- comandi sulla schermata di blocco ---------------- */
@@ -4671,6 +5065,7 @@ let udDirty = !!load(K.userDirty), udTimer = null, udBusy = false, udLastSync = 
 const canWrite = () => (load(K.scopes) || '').split(/\s+/).includes(WRITE_SCOPE);
 function saveUD() {
   saveJSON(K.user, UD); udDirty = true; store(K.userDirty, '1');
+  if (Object.keys(OFFP.p).length) offSoon();                // playlist scaricate: brani aggiunti o tolti
   clearTimeout(udTimer); udTimer = setTimeout(syncUD, 3000);
 }
 function canonUD(u) { return JSON.stringify([Object.entries(u.fav).sort(), Object.entries(u.pl).sort(), u.hist, Object.entries(u.agg || {}).sort(), u.aggUpto || 0]); }
@@ -4727,7 +5122,7 @@ async function uploadUD() {
 }
 async function syncUD() {
   clearTimeout(udTimer);
-  if (udBusy || !linked()) return;
+  if (udBusy || !linked() || navigator.onLine === false) return;
   udBusy = true;
   const first = !udLastSync;
   try {
@@ -4744,6 +5139,7 @@ async function syncUD() {
   finally { udBusy = false; if (udBoxDraw) udBoxDraw(); }
 }
 function refreshUDViews() {
+  if (Object.keys(OFFP.p).length) offSoon();
   const v = NAV[NAV.length - 1].v;
   if (['home', 'favTracks', 'favAlbums', 'favArtists', 'playlist', 'mix', 'smart', 'stats'].includes(v)) refreshViews();
   refreshFavButtons(); refreshStars();
@@ -4915,6 +5311,7 @@ function trackMenu(t, ctx = {}) {
     sAct('list', 'Aggiungi a una playlist…', () => pickPlaylist([t.lower])),
     sAct('queue', 'Riproduci dopo', () => playNext(t.lower)),
     sAct('radio', 'Avvia un mix da qui', () => startSeedMix({ track: t }, info.title)),
+    offTrackMenu(t),
   ];
   if (ctx.pl && UD.pl[ctx.pl]) {
     const n = UD.pl[ctx.pl].items.length;
@@ -4930,7 +5327,7 @@ function trackMenu(t, ctx = {}) {
 /* viste: Home, preferiti, playlist, mix */
 function prevLabel() {
   const p = NAV[NAV.length - 2]; if (!p) return 'Home';
-  const fixed = { home: 'Home', lib: 'Libreria', search: 'Cerca', settings: 'Impostazioni', favTracks: 'Brani preferiti', favAlbums: 'Album preferiti', favArtists: 'Artisti preferiti', mix: 'Il tuo mix', booklet: 'Booklet', health: 'Controllo libreria', stats: 'Statistiche' }[p.v];
+  const fixed = { home: 'Home', lib: 'Libreria', search: 'Cerca', settings: 'Impostazioni', favTracks: 'Brani preferiti', favAlbums: 'Album preferiti', favArtists: 'Artisti preferiti', mix: 'Il tuo mix', booklet: 'Booklet', health: 'Controllo libreria', stats: 'Statistiche', offline: 'Scaricati' }[p.v];
   if (fixed) return fixed;
   if (p.v === 'artist' && LIB.artists.get(p.key)) return LIB.artists.get(p.key).name;
   if (p.v === 'album' && LIB.albums.get(p.key)) return LIB.albums.get(p.key).title;
@@ -4964,6 +5361,7 @@ function viewHome() {
     h('button', { class: 'ibtn', 'aria-label': 'Cerca nella libreria', html: ic('search', 24), onclick: () => goTab('search') }),
     h('span', { class: 'applogo', role: 'img', 'aria-label': 'Basalto', html: LOGO_SVG })))];
   if (!LIB.tracks.size) { nodes.push(h('div', { class: 'empty' }, syncing ? 'Sto leggendo la libreria…' : 'La libreria è vuota: copia le cartelle degli album nella cartella dell\'app su Dropbox.')); return nodes; }
+  if (navOff()) nodes.push(offBanner());
   if (!MIX || !MIX.items.length) makeMix();
   const sub = MIX.basis === 'ascolti' ? 'Simile ai tuoi ultimi ascolti' : 'Ascolta qualcosa: il mix seguirà i tuoi gusti';
   nodes.push(h('div', { class: 'mixcard' },
@@ -4983,6 +5381,7 @@ function viewHome() {
     navRow('heart', 'Brani preferiti', plural(nT, 'brano', 'brani'), () => go({ v: 'favTracks' })),
     navRow('disc', 'Album preferiti', plural(nA, 'album', 'album'), () => go({ v: 'favAlbums' })),
     navRow('user', 'Artisti preferiti', plural(nR, 'artista', 'artisti'), () => go({ v: 'favArtists' })));
+  nodes.push(h('div', { class: 'sec-h' }, 'Senza rete'), offNavRow());
   const pls = playlists();
   nodes.push(h('div', { class: 'between', style: 'margin:24px 0 4px' }, h('div', { class: 'sec-h', style: 'margin:0' }, 'Playlist'),
     h('button', { class: 'ibtn', 'aria-label': 'Nuova playlist', html: ic('plus', 24), onclick: newPlaylistFlow })));
@@ -4992,6 +5391,38 @@ function viewHome() {
   nodes.push(h('div', { class: 'sec-h' }, 'I tuoi ascolti'), navRow('chart', 'Statistiche', UD.hist.length ? plural(UD.hist.length + Object.values(UD.agg || {}).reduce((n, x) => n + (x.n || 0), 0), 'ascolto', 'ascolti') + ' registrati' : 'Ancora nessun ascolto', () => go({ v: 'stats' })));
   if (!canWrite()) nodes.push(h('div', { class: 'note', style: 'margin-top:18px' }, 'Preferiti e playlist sono salvati solo su questo dispositivo. Per averli anche sul PC attiva il salvataggio su Dropbox in Impostazioni.'));
   return nodes;
+}
+function offNavRow() { const r = navRow('dl', 'Scaricati', offSumText(), () => go({ v: 'offline' })); r.querySelector('.t2').dataset.offsum = ''; return r; }
+function offBanner() {
+  return h('button', { class: 'note offnote', style: 'width:100%;text-align:left;margin-top:12px', onclick: () => go({ v: 'offline' }) },
+    h('span', { html: ic('noNet', 22), style: 'display:flex;flex:none' }), h('span', null, 'Senza rete: suonano i brani scaricati. Gli altri tornano disponibili con la connessione.'));
+}
+function viewOffline() {
+  const als = Object.entries(OFFP.a).sort((a, b) => b[1] - a[1]).map(([k]) => LIB.albums.get(k)).filter(Boolean);
+  const pls = Object.entries(OFFP.p).sort((a, b) => b[1] - a[1]).map(([id]) => UD.pl[id] && !UD.pl[id].del ? Object.assign({ id }, UD.pl[id]) : null).filter(Boolean);
+  const trs = Object.entries(OFFP.t).sort((a, b) => b[1] - a[1]).map(([k]) => k).filter(k => LIB.tracks.has(k));
+  const all = [...new Set([...als.flatMap(al => al.tracks), ...pls.flatMap(plTracks), ...trs])].filter(offTrackOk);
+  const any = als.length || pls.length || trs.length;
+  const space = h('p', { class: 'small mut' }, '');
+  if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => { space.textContent = `Basalto occupa ${offBytes(e.usage || 0)} sul telefono${e.quota ? ` · ancora utilizzabili circa ${offBytes(Math.max(0, e.quota - (e.usage || 0)))}` : ''}.`; }).catch(() => {});
+  const nodes = [backBtnLabeled(prevLabel()), h('h1', { style: 'margin-top:6px' }, 'Scaricati'),
+    h('div', { class: 'small mut', style: 'margin-top:6px;line-height:1.45', 'data-offsum': '' }, offSumText()),
+    all.length ? h('div', { class: 'btns' }, playBtn(all), shuffleBtn(all)) : null];
+  if (navOff()) nodes.push(offBanner());
+  if (!any) nodes.push(h('div', { class: 'empty' }, 'Non hai ancora scaricato niente. Nella pagina di un album o di una playlist tocca «Scarica»; per un solo brano usa il menu ⋯.'));
+  if (als.length) nodes.push(h('div', { class: 'sec-h' }, 'Album'), h('div', { class: 'grid' }, ...als.map(al => albumCard(al, true))));
+  if (pls.length) nodes.push(h('div', { class: 'sec-h' }, 'Playlist'), ...pls.map(playlistRow));
+  if (trs.length) nodes.push(h('div', { class: 'sec-h' }, 'Brani'), h('div', null, ...trackRowsFor(trs)));
+  nodes.push(h('div', { class: 'box', style: 'margin-top:24px' }, h('h2', null, 'Sul telefono'), space,
+    h('p', { class: 'small mut' }, 'Sono copie identiche dei FLAC su Dropbox, nella memoria di Basalto (non nell\'app File). Suonano dal telefono anche quando c\'è rete. I download vanno avanti mentre Basalto è aperta o la musica suona, e se si interrompono ripartono da dove erano arrivati.'),
+    any ? h('div', { class: 'btnrow' }, h('button', { class: 'btn sec', onclick: offClearAll }, 'Togli tutti i download')) : null));
+  return nodes;
+}
+async function offClearAll() {
+  const T = offTotals();
+  if (!confirm(`Togliere tutti i brani scaricati?${T.bytes ? ' Liberi ' + offBytes(T.bytes) + ' sul telefono.' : ''} Restano ascoltabili in streaming.`)) return;
+  OFFP = { a: {}, p: {}, t: {} }; offSavePins(); log('Brani scaricati: tolti tutti');
+  await offSync(true); refreshViews(); toast('Download tolti');
 }
 function listHeader(title, sub, keys, extra) {
   return [backBtnLabeled(prevLabel()),
@@ -5030,6 +5461,7 @@ function viewPlaylist(id) {
     sAct('pencil', 'Rinomina', () => askName('Rinomina la playlist', p.name, 'Salva', name => renamePlaylist(id, name))),
     sAct('trash', 'Elimina la playlist', () => { if (confirm(`Eliminare la playlist «${p.name}»? I brani restano nella libreria.`)) { deletePlaylist(id); history.back(); } })]) });
   return [...listHeader(p.name, plural(keys.length, 'brano', 'brani') + totalDur(keys), keys, menu),
+    keys.length || OFFP.p[id] ? offRow('p', id, p.name) : null,
     keys.length ? h('div', { style: 'margin-top:10px' }, ...trackRowsFor(keys, i => ctx[i])) : h('div', { class: 'empty' }, 'La playlist è vuota: aggiungi brani dal menu ⋯ di un brano o di un album.')];
 }
 function viewMix() {
@@ -5613,6 +6045,24 @@ function tintFromColor(css) {                                // copertina assent
   if (hx) { const n = parseInt(hx[1], 16); setPlayerTint([n >> 16, (n >> 8) & 255, n & 255]); }
 }
 
+/* ---------------- app apribile senza rete (v1.52) ----------------
+   sw.js tiene sul telefono una copia dei file del sito (pagina, moduli audio, icone): senza rete Basalto si apre lo
+   stesso. Con la rete la pagina arriva sempre dalla rete, quindi gli aggiornamenti funzionano come prima. */
+const APPC = 'basalto-app-v1';
+function swSetup() {
+  if (!('serviceWorker' in navigator)) return;
+  const had = !!navigator.serviceWorker.controller;
+  const warm = () => caches.open(APPC).then(async c => {
+    for (const n of ['rx-tono.js', 'rx-ascolto.js']) { const u = n + '?v=' + VERSION; if (!(await c.match(u))) await fetch(u).catch(() => {}); }   // moduli di questa versione
+    for (const r of await c.keys()) { const v = new URL(r.url).searchParams.get('v'); if (v && v !== VERSION) await c.delete(r); }                // copie delle versioni precedenti
+  }).catch(() => {});
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    if (!reg) return;
+    if (!had) log('App salvata sul telefono: si apre anche senza rete');
+    if (navigator.serviceWorker.controller) warm(); else navigator.serviceWorker.addEventListener('controllerchange', warm, { once: true });
+  }).catch(e => log('Copia dell\'app per l\'uso senza rete non riuscita: ' + e.message));
+}
+
 /* ---------------- aggiornamenti dell'app ----------------
    Legge version.json dal sito del player (stesso indirizzo, nessun altro servizio): se c'è una versione nuova
    mostra un avviso con «Aggiorna», che ricarica la pagina e riparte dal punto in cui eri. */
@@ -5655,6 +6105,7 @@ function render() {
   else if (cur.v === 'favAlbums') nodes.push(...viewFavAlbums());
   else if (cur.v === 'favArtists') nodes.push(...viewFavArtists());
   else if (cur.v === 'playlist') nodes.push(...viewPlaylist(cur.id));
+  else if (cur.v === 'offline') nodes.push(...viewOffline());
   else if (cur.v === 'mix') nodes.push(...viewMix());
   else if (cur.v === 'smart') nodes.push(...viewSmart(cur.id));
   else if (cur.v === 'booklet') nodes.push(...viewBooklet(cur.key));
@@ -5769,7 +6220,7 @@ function viewLib() {
   return nodes;
 }
 function albumCard(al, showArtist) {
-  return h('button', { class: 'card', onclick: () => go({ v: 'album', key: al.key }) }, albumArt(al, 'w256h256'),
+  return h('button', { class: 'card' + (navOff() && !al.tracks.some(offTrackOk) ? ' na' : ''), 'data-album': al.key, onclick: () => go({ v: 'album', key: al.key }) }, albumArt(al, 'w256h256'),
     h('span', { class: 'txt' }, h('span', { class: 't1', style: 'font-size:15px' }, al.title), h('span', { class: 't2' }, [showArtist ? al.artistName : '', al.year].filter(Boolean).join(' · ') || plural(al.tracks.length, 'brano', 'brani'))));
 }
 // Notizie: apre Google News sull'artista in una nuova scheda (nessuna richiesta parte dal player; la fonte non viene indicata)
@@ -6353,6 +6804,7 @@ function viewAlbum(key) {
         sAct('queue', 'Riproduci dopo', () => { if (!curTrack()) playQueue(al.tracks, 0, false); else { al.tracks.slice().reverse().forEach(k => { Q.items.push(k); Q.order.splice(Q.pos + 1, 0, Q.items.length - 1); }); toast('L\'album parte dopo il brano in ascolto'); } }),
         LIB.artists.has(al.artistKey) ? sAct('radio', 'Avvia un mix da ' + al.artistName, () => startSeedMix({ artistKey: al.artistKey }, al.artistName)) : null,
         LIB.artists.has(al.artistKey) ? sAct('user', 'Vai all\'artista', () => go({ v: 'artist', key: al.artistKey })) : null]) })),
+    offRow('a', al.key, al.title),
     hasBooklet(al) ? h('div', { style: 'margin-top:10px' }, bookletRow(al)) : null,
     h('div', { style: 'margin-top:10px' }, ...rows),
     skSection('album', al)];
@@ -6361,9 +6813,11 @@ function trackRow(t, i, onclick, sub, ctx) {
   const info = trackInfo(t);
   const now = curTrack() && curTrack().lower === t.lower;
   const label = t.numLabel || String(i + 1);
-  const row = h('button', { class: 'track' + (now ? ' now' : ''), 'data-lower': t.lower, onclick, onpointerdown: () => warm(t) },
+  const has = offHas(fileOf(t));
+  const row = h('button', { class: 'track' + (now ? ' now' : '') + (!has && navOff() ? ' na' : ''), 'data-lower': t.lower, onclick, onpointerdown: () => warm(t) },
     h('span', { class: 'n', html: now ? ic('eq', 16) : '' }, now ? null : label),
     h('span', { class: 'tt' }, h('span', null, info.title), sub ? h('span', { class: 't2' }, sub) : null),
+    h('span', { class: 'o', 'aria-label': has ? 'Scaricato' : null, html: has ? ic('dlOn', 15) : '' }),
     h('span', { class: 'd' }, info.dur ? fmtTime(info.dur) : ''));
   row.dataset.num = label;
   const more = h('button', { class: 'more', 'aria-label': 'Altre azioni: ' + info.title, html: ic('more', 20), onclick: () => trackMenu(t, ctx) });
@@ -6441,10 +6895,12 @@ function viewSettings() {
     h('div', { class: 'box', 'data-play-host': '' }, playbackPanel()),
     h('div', { class: 'box', 'data-eq-host': '' }, eqPanel()),
     udBox(),
+    h('div', { class: 'box' }, h('h2', null, 'Ascolto senza rete'), h('p', { class: 'small mut' }, 'Album, playlist e brani che scarichi restano sul telefono identici agli originali.'),
+      h('div', { style: 'margin-top:4px' }, offNavRow())),
     h('div', { class: 'box' }, h('div', { class: 'eq' },
       h('div', { class: 'between' }, h('strong', null, 'Copertine sul dispositivo'),
         h('button', { class: 'btn sec', onclick: e => { clearCovers(); e.target.closest('.box').querySelector('p').textContent = 'Nessuna copertina salvata'; toast('Copertine cancellate'); } }, 'Cancella')),
-      h('p', { class: 'small mut' }, ART.mem.size ? `${plural([...ART.mem.keys()].filter(k => !k.startsWith('n|')).length, 'copertina salvata', 'copertine salvate')}: all'apertura si vedono subito. Sono solo immagini piccole; la musica non viene salvata.` : 'Nessuna copertina salvata'))),
+      h('p', { class: 'small mut' }, ART.mem.size ? `${plural([...ART.mem.keys()].filter(k => !k.startsWith('n|')).length, 'copertina salvata', 'copertine salvate')}: all'apertura si vedono subito, anche senza rete. Sono solo immagini piccole; la musica resta sul telefono solo se la scarichi tu.` : 'Nessuna copertina salvata'))),
     h('div', { class: 'box' }, h('h2', null, 'Come copiare la musica'),
       h('p', null, 'Copia le cartelle degli album così come sono dentro Applicazioni › [nome dell\'app]. L\'app ricava artista, album e anno dal nome della cartella («Artista - Album (2011) [FLAC 16-44]», «1983 - Artista - Album», …) e poi li corregge con i dati contenuti nei FLAC.'),
       h('p', null, 'Funzionano anche: cartelle Artista › Album, dischi multipli (CD1, Disc 2), album in un unico FLAC con file .cue, copertine in sottocartelle (Artwork, Covers, Scans).')),
@@ -6545,13 +7001,18 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   try { ['mx_news', 'mx_news_v1', 'mx_index_v2', 'mx_ameta_v1'].forEach(k => localStorage.removeItem(k)); } catch (e) {}   // novità da MusicBrainz tolte nella v1.11
   log(`App aperta ${isStandalone() ? 'dalla schermata Home' : 'nel browser'} · v${VERSION}`);
   try { await handleRedirect(); } catch (e) { bootError = 'Errore nel collegamento: ' + e.message; }
-  await Promise.all([loadCoverCache(), loadTagsDb()]);
+  await Promise.all([loadCoverCache(), loadTagsDb(), offLoad()]);
   buildLib(); applyCachedEmbedded();
   if (TDB.ready && !TDB.done) TDB.ready.then(() => { buildLib(); refreshViews(); });     // archivio dei tag lento: aggiorno appena è pronto
   render();
   setTimeout(checkUpdate, 4000);
   setTimeout(hideSplash, Math.max(0, 1000 - performance.now()));
-  if (linked()) { restoreResumeIfNeeded(); setTimeout(syncUD, 2500); await syncIndex(); applyCachedEmbedded(); setTimeout(prefetchCovers, 3000); }
+  setTimeout(swSetup, 3000);
+  if (linked()) {
+    restoreResumeIfNeeded();
+    if (navigator.onLine === false) { log('Senza rete: libreria dalla memoria del telefono, suonano i brani scaricati'); offSoon(2000); }
+    else { setTimeout(syncUD, 2500); await syncIndex(); applyCachedEmbedded(); setTimeout(prefetchCovers, 3000); }
+  }
 })();
 </script>
 </body>
