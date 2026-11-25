@@ -31,6 +31,8 @@ Artista/Album/01 Brano.flac                                      (struttura clas
 Nome dell'app: Basalto. All'apertura una schermata nera con il solo logo per 1 secondo (v1.18).
 
 
+v1.48: foto della biografia chiesta a 960 px, una delle misure standard di Wikimedia: con 900 px Wikimedia rispondeva «429» (registro del 25/11: «foto non scaricata (Load failed)» per i Pearl Jam). Per le schede già salvate senza foto basta «Aggiorna da Wikipedia».
+
 v1.47: **biografia dell'artista e storia del disco, avvio più rapido con rete debole**.
 - Biografia (pagina dell'artista) e «Il disco» (pagina dell'album): la voce intera di Wikipedia in italiano, in inglese se quella italiana non c'è, senza note e collegamenti. La voce giusta si trova con MusicBrainz → Wikidata (niente omonimi: serve lo stesso nome; con più artisti omonimi vince quello che ha i tuoi album); se manca il collegamento provo i titoli più probabili e controllo che parlino di musica. Foto dell'artista dalla voce, con autore e licenza.
 - Permanente: la scheda (testo .json e foto) viene salvata su Dropbox in `/_player/schede/Artisti/` e `/_player/schede/Album/` e da lì si legge sempre, anche se Wikipedia cambia; sul telefono ne resta una copia per aprirla subito. «Aggiorna da Wikipedia», «Modifica» (scegli tu la voce con un link o un titolo, oppure scrivi il testo).
