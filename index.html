@@ -331,7 +331,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.50';
+const VERSION = '1.51';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -5916,13 +5916,24 @@ async function skLoad(kind, o) {
   const txt = await b.text(), d = JSON.parse(txt);
   skCache('put', key, txt); return d;
 }
+async function skPhotoViaDropbox(kind, o, url) {
+  if (!canWrite() || !linked()) return null;
+  const path = skPath(kind, o) + '.jpg';
+  try {
+    await dbxSaveUrl(path, url); const b = await dbxGet(path); if (!b || !b.size) throw new Error('file vuoto');
+    log(`Scheda ${skLabel(kind, o)}: foto presa da Dropbox su Wikimedia e salvata (${Math.round(b.size / 1024)} kB)`);
+    return b;
+  } catch (e) { log(`Scheda ${skLabel(kind, o)}: anche Dropbox non ha potuto prendere la foto (${e.message})`); return null; }
+}
 async function skPhoto(kind, o, d) {
   if (!d || !d.photo || !d.photo.file) return null;
   if (d.photo.remote) {
     try {
-      const r = await wmFetch(d.photo.remote); if (!r.ok) throw new Error('HTTP ' + r.status);
-      const b = await r.blob(), ph = { ...d.photo, ext: /png/.test(b.type) ? '.png' : /webp/.test(b.type) ? '.webp' : '.jpg' }; delete ph.remote;
-      const nd = { ...d, photo: ph }, where = await skSave(kind, o, nd, b); SKD.set(skPath(kind, o), nd); Object.assign(d, nd);
+      let b = null, onDbx = false;               // prima dal telefono, poi facendola prendere a Dropbox
+      try { const r = await wmFetch(d.photo.remote); if (!r.ok) throw new Error('HTTP ' + r.status); b = await r.blob(); }
+      catch (e) { b = await skPhotoViaDropbox(kind, o, d.photo.remote); if (!b) throw e; onDbx = true; }
+      const ph = { ...d.photo, ext: onDbx ? '.jpg' : /png/.test(b.type) ? '.png' : /webp/.test(b.type) ? '.webp' : '.jpg' }; delete ph.remote; if (onDbx) ph.saved = true;
+      const nd = { ...d, photo: ph }, where = await skSave(kind, o, nd, b, onDbx); SKD.set(skPath(kind, o), nd); Object.assign(d, nd);
       log(`Scheda ${skLabel(kind, o)}: foto scaricata ora · ${where === 'dropbox' ? 'salvata su Dropbox' : 'solo sul telefono'}`);
       const u = URL.createObjectURL(b); SKURL.set(skPath(kind, o) + ph.ext, u); return u;
     } catch (e) { return d.photo.remote; }
@@ -5933,13 +5944,13 @@ async function skPhoto(kind, o, d) {
   if (!b) return null;
   const u = URL.createObjectURL(b); SKURL.set(key, u); return u;
 }
-async function skSave(kind, o, d, photo) {
+async function skSave(kind, o, d, photo, photoOnDbx) {
   const base = skPath(kind, o), txt = JSON.stringify(d);
   await skCache('put', base + '.json', txt);
   if (photo) { await skCache('put', base + d.photo.ext, photo, photo.type); SKURL.delete(base + d.photo.ext); }
   if (d.none) return 'telefono';
   if (!canWrite()) return 'telefono';
-  try { if (photo) await dbxPut(base + d.photo.ext, photo); await dbxPut(base + '.json', txt); return 'dropbox'; }
+  try { if (photo && !photoOnDbx && !(d.photo && d.photo.saved)) await dbxPut(base + d.photo.ext, photo); await dbxPut(base + '.json', txt); return 'dropbox'; }
   catch (e) { log(`Scheda ${skLabel(kind, o)}: salvataggio su Dropbox non riuscito (${e.message})`); return 'telefono'; }
 }
 // --- ricerca della voce ---
@@ -6039,6 +6050,31 @@ async function wpPhotoInfo(l, file, w) {
    Wikimedia mando il minimo: l'indirizzo del sito, https://testext82.github.io/, senza percorso. */
 const WM_REF = 'strict-origin-when-cross-origin';
 const wmFetch = url => fetch(url, { referrerPolicy: WM_REF });
+/* v1.51 · Anche con il Referer (v1.50) il telefono non riceve le foto da upload.wikimedia.org (registro del 25/11 sera:
+   «Load failed» a 960 e 500 px, foto vuota anche caricata direttamente), mentre il testo da it.wikipedia.org arriva.
+   Il blocco è tra l'app sul telefono e i server delle foto di Wikimedia. Allora la foto la va a prendere Dropbox:
+   con «salva da indirizzo» (files/save_url) i server di Dropbox la scaricano da Wikimedia e la mettono nella cartella
+   dell'app, /_player/schede/Artisti/; il telefono poi la legge da Dropbox come tutto il resto. */
+async function dbxSaveUrl(path, url) {
+  const call = async (ep, body) => {
+    const tok = await getToken();
+    const r = await fetch(API + ep, { method: 'POST', headers: { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const t = await r.text(); if (!r.ok) throw new Error('Dropbox ' + r.status + ' ' + t.slice(0, 120));
+    return JSON.parse(t);
+  };
+  let j = await call('files/save_url', { path, url }); const id = j.async_job_id;
+  for (let i = 0; i < 40 && id && (j['.tag'] === 'async_job_id' || j['.tag'] === 'in_progress'); i++) {
+    await sleep(800); j = await call('files/save_url/check_job_status', { async_job_id: id });
+  }
+  if (j['.tag'] !== 'complete') throw new Error('Dropbox non è riuscito a prenderla (' + (j.failed ? JSON.stringify(j.failed).slice(0, 80) : j['.tag']) + ')');
+  return j;
+}
+// diagnosi: cosa blocca la foto sul telefono (regole della pagina o rete) — finisce nel registro
+document.addEventListener('securitypolicyviolation', e => { try { log(`Bloccato dalle regole di sicurezza della pagina: ${e.violatedDirective} → ${String(e.blockedURI).slice(0, 80)}`); } catch (x) {} });
+async function wmProbe(url) {
+  try { await fetch(url, { mode: 'no-cors', referrerPolicy: WM_REF }); return 'il server risponde ma non dà il permesso alla pagina (CORS)'; }
+  catch (e) { return 'il server delle foto non risponde all\'app (' + e.message + ')'; }
+}
 async function wpPhoto(l, file) {
   let last = '', first = null;
   for (const w of [960, 500]) {
@@ -6047,7 +6083,9 @@ async function wpPhoto(l, file) {
     try { const r = await wmFetch(info.url); if (!r.ok) throw new Error('HTTP ' + r.status); return { blob: await r.blob(), ...info, size }; }
     catch (e) { last = `${e.message} · ${size}`; }
   }
-  const e = new Error(last); e.info = first; throw e;
+  const e = new Error(last); e.info = first;
+  if (first) e.probe = await wmProbe(first.url);
+  throw e;
 }
 function wpFromInput(s) {        // link o titolo scritto da te
   s = String(s || '').trim(); if (!s) return null;
@@ -6086,9 +6124,13 @@ async function skFetch(kind, o, want) {
       log(`Scheda ${skLabel(kind, o)}: foto ${ph.size}${il !== f.l ? ' (dalla voce inglese)' : ''}`);
     } catch (e) {
       photo = null;
-      // non si lascia scaricare (permessi CORS): la mostro direttamente da Wikimedia, senza salvarla
-      if (e.info && e.info.url) d.photo = { file: img, remote: e.info.url, author: e.info.author || '', license: e.info.license || '', from: il };
-      log(`Scheda ${skLabel(kind, o)}: foto non scaricata (${e.message})${d.photo ? ', la mostro da Wikimedia' : ''}`);
+      log(`Scheda ${skLabel(kind, o)}: foto non scaricata dal telefono (${e.message}${e.probe ? ' · ' + e.probe : ''})`);
+      if (e.info && e.info.url) {
+        const info = { file: img, author: e.info.author || '', license: e.info.license || '', from: il };
+        const viaDbx = await skPhotoViaDropbox(kind, o, e.info.url);
+        if (viaDbx) { photo = viaDbx; d.photo = { ...info, ext: '.jpg', saved: true }; }
+        else d.photo = { ...info, remote: e.info.url };          // ultima possibilità: la mostro direttamente da Wikimedia
+      }
     }
   }
   return { d, photo };
