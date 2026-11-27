@@ -342,7 +342,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.61';
+const VERSION = '1.62';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -1324,7 +1324,7 @@ const RADIO = [
   { id: 'capital', name: 'Radio Capital', short: 'C', color: '#8c1d40', fmt: 'AAC', urls: ['https://4c4b867c89244861ac216426883d1ad0.msvdn.net/radiocapital/radiocapital/play1.m3u8', 'https://streamcdng18-4c4b867c89244861ac216426883d1ad0.msvdn.net/radiocapital/radiocapital/play1.m3u8', 'https://4c4b867c89244861ac216426883d1ad0.msvdn.net/radiocapital/radiocapital/master_ma.m3u8'] },
   { id: 'lifetime', name: 'Lifetime-Radio', short: 'LT', color: '#5b3a8e', fmt: 'MP3', laut: 'lifetimeradio', urls: ['https://stream.laut.fm/lifetimeradio'] },
 ];
-const RAD = { el: null, st: null, by: null, sys: 0, song: '', urlI: 0, tries: 0, pausedAt: 0, poll: 0, t0: 0, art: {}, good: {} };
+const RAD = { el: null, st: null, by: null, fail: false, sys: 0, song: '', urlI: 0, tries: 0, pausedAt: 0, poll: 0, t0: 0, art: {}, good: {} };
 /* ripartenza automatica: se è iOS a fermare la musica (microfono, Siri, chiamata), riparte quando l'interruzione finisce */
 let sysPause = 0, sysHid = false, visAt = 0;
 /* v1.61 · iOS congela Basalto quando è in sottofondo e non suona (anche durante un vocale di WhatsApp): l'avviso
@@ -2723,6 +2723,9 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------------- radio (v1.60) ---------------- */
 const radioStation = id => RADIO.find(s => s.id === id);
+// v1.62: mentre si collega lo dico (Deejay e Capital possono metterci 5-8 s): senza suono e con ⏸ sembrava ferma
+const radioConn = () => !!(RAD.t0 && RAD.el && !RAD.el.paused);
+const radioState = (on, off) => radioConn() ? 'Collegamento…' : RAD.fail ? 'Non raggiungibile' : (RAD.song || (RAD.el && !RAD.el.paused ? on : off));
 function radioElem() {
   if (RAD.el) return RAD.el;
   const el = RAD.el = document.createElement('audio');
@@ -2739,7 +2742,7 @@ function radioElem() {
     if (!RAD.st) return;
     if (!RAD.by && (RAD.t0 || el.error)) return;     // cambio di indirizzo o errore durante la partenza: non è una pausa
     RAD.pausedAt = Date.now();
-    if (RAD.by) { const ka = RAD.by !== 'cambio stazione' && kaStart(); log(`⏸ Radio in pausa · ${RAD.by}${ka ? ' · sessione audio sveglia per 10 min' : ''}`); senPause(); }
+    if (RAD.by) { const ka = RAD.by !== 'cambio stazione' && kaStart(); log(`⏸ Radio in pausa · ${RAD.by}${RAD.t0 ? ' · durante il collegamento' : ''}${ka ? ' · sessione audio sveglia per 10 min' : ''}`); senPause(); }
     else {
       const t = RAD.sys = Date.now(); RAD.sysHid = isHidden(); log(`⏸ Radio fermata da iOS${isHidden() ? ' · schermo spento' : ''}`);
       setTimeout(() => {          // nessuna interruzione vista dal sensore: cuffie, auto o AirPlay scollegati → resta in pausa
@@ -2756,7 +2759,7 @@ function radioElem() {
     const code = el.error ? el.error.code : '?';
     if (RAD.urlI + 1 < s.urls.length) { log(`Radio «${s.name}»: indirizzo ${RAD.urlI + 1} non risponde (errore ${code}), provo il successivo`); RAD.urlI++; radioLoad(); return; }
     if (RAD.tries < 2 && !navOff()) { RAD.tries++; RAD.urlI = 0; log(`Radio «${s.name}» non raggiungibile (errore ${code}), riprovo tra 3 s`); setTimeout(() => { if (RAD.st === s.id) radioLoad(); }, 3000); return; }
-    log(`✗ Radio «${s.name}» non raggiungibile (errore ${code})`); toast(`${s.name} non raggiungibile`); radioPaint();
+    RAD.t0 = 0; RAD.fail = true; log(`✗ Radio «${s.name}» non raggiungibile (errore ${code})`); toast(`${s.name} non raggiungibile`); radioPaint(); radioMediaSession();
   });
   on('waiting', () => { if (RAD.st && !RAD.t0) log('Radio: in attesa di dati (rete lenta?)'); });
   // titoli in onda dentro il flusso (Deejay, Capital): Safari li passa come «metadati» del flusso, se la radio li manda
@@ -2773,9 +2776,10 @@ function radioElem() {
 }
 function radioLoad() {
   const s = radioStation(RAD.st), el = radioElem(); if (!s) return;
-  RAD.t0 = performance.now();
+  RAD.t0 = performance.now(); RAD.fail = false;
   const url = el.src = s.urls[RAD.urlI];
   const p = el.play(); if (p && p.catch) p.catch(e => { if (e.name !== 'AbortError' && el.getAttribute('src') === url && !el.error) log(`Radio «${s.name}»: partenza non riuscita (${e.name})`); radioPaint(); });
+  radioPaint(); radioMediaSession();
 }
 function radioStart(id) {
   const s = radioStation(id); if (!s) return;
@@ -2847,7 +2851,7 @@ function radioMediaSession() {
   if (!('mediaSession' in navigator) || !RAD.st) return;
   const s = radioStation(RAD.st), art = radioArtUrl(s);
   try {
-    MS_META = new MediaMetadata(Object.assign({ title: RAD.song || s.name, artist: RAD.song ? s.name : 'Radio · in diretta', album: 'Radio' }, art ? { artwork: [{ src: art, sizes: '512x512', type: 'image/png' }] } : {}));
+    MS_META = new MediaMetadata(Object.assign({ title: (!radioConn() && RAD.song) || s.name, artist: RAD.song && !radioConn() ? s.name : radioState('Radio · in diretta', 'Radio · in pausa'), album: 'Radio' }, art ? { artwork: [{ src: art, sizes: '512x512', type: 'image/png' }] } : {}));
     navigator.mediaSession.metadata = MS_META;
   } catch (e) {}
   setupMediaSession(); updatePosition();
@@ -2859,7 +2863,7 @@ function radioMini() {
   const s = radioStation(RAD.st); if (!s) return;
   $('mini').classList.remove('hidden');
   $('miniTitle').textContent = s.name;
-  $('miniSub').textContent = RAD.song || (RAD.el && !RAD.el.paused ? 'Radio · in diretta' : 'Radio · in pausa');
+  $('miniSub').textContent = radioState('Radio · in diretta', 'Radio · in pausa');
   const box = $('miniArt'); if (box.dataset.k !== 'radio:' + s.id) { box.dataset.k = 'radio:' + s.id; box.style.background = s.color; box.replaceChildren(h('span', { style: 'font-size:14px;font-weight:700' }, s.short)); }
   $('miniProg').style.width = '0%'; setPP();
 }
@@ -2868,7 +2872,7 @@ function radioPaint() {
   document.querySelectorAll('[data-radio]').forEach(b => {
     const on = b.dataset.radio === RAD.st, playing = on && RAD.el && !RAD.el.paused;
     b.classList.toggle('on', on); const sub = b.querySelector('.t2');
-    if (sub) sub.textContent = on ? (RAD.song || (playing ? 'In onda' : 'In pausa')) : radioStation(b.dataset.radio).fmt;
+    if (sub) sub.textContent = on ? radioState('In onda', 'In pausa') : radioStation(b.dataset.radio).fmt;
     const ico = b.querySelector('.rplay'); if (ico) ico.innerHTML = playing ? ic('eq', 18) : '';
   });
   document.querySelectorAll('[data-radio-now]').forEach(e => e.replaceChildren(...radioNowKids()));
@@ -2883,7 +2887,7 @@ function radioNowKids() {
   const s = radioStation(RAD.st); if (!s) return [h('p', { class: 'small mut' }, 'Tocca una stazione per ascoltarla.')];
   const playing = RAD.el && !RAD.el.paused;
   return [h('div', { class: 'between', style: 'gap:12px' },
-    h('div', { style: 'min-width:0' }, h('div', { style: 'font-weight:700;font-size:17px' }, s.name), h('div', { class: 'small mut' }, RAD.song || (playing ? 'In diretta' : 'In pausa'))),
+    h('div', { style: 'min-width:0' }, h('div', { style: 'font-weight:700;font-size:17px' }, s.name), h('div', { class: 'small mut' }, radioState('In diretta', 'In pausa'))),
     h('button', { class: 'playbig', style: 'width:52px;height:52px', 'aria-label': playing ? 'Pausa' : 'Riproduci', onclick: radioToggle, html: ic(playing ? 'pause' : 'play', 24) })),
     h('button', { class: 'small mut', style: 'margin-top:10px', onclick: () => radioStop('tasto Spegni') }, curTrack() ? 'Spegni la radio e torna alla musica' : 'Spegni la radio')];
 }
