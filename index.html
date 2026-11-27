@@ -335,7 +335,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.56';
+const VERSION = '1.57';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -2801,12 +2801,12 @@ Object.assign(HP_PROFILES, SPK);
 const HP_TONE = [['Bassi', 'LSC', 120, 0.7], ['Medi', 'PK', 1000, 0.7], ['Alti', 'HSC', 6000, 0.7]];   // cursori delle casse
 let HP = Object.assign({ id: 'none', adj: {} }, loadJSON(K.hp) || {});
 if (!HP.adj) HP.adj = {};
-let hpAB = false;                 // confronto: correzione esclusa per un momento (non salvato)
 if (HP.id.startsWith('ananda') && !HP_PROFILES[HP.id]) { HP.id = 'ananda-stealth'; saveJSON(K.hp, HP); }   // v1.55: la tua Ananda è la Stealth
 const hpAdj = id => Object.assign({ b: 0, m: 0, t: 0 }, HP.adj[id] || {});
-function hpFiltersOf(id) {        // filtri dell'uscita scelta: cuffie = AutoEQ; casse = profilo + Bassi, Medi, Alti
+const hpK = id => { const k = (HP.adj[id] || {}).k; return typeof k === 'number' ? k : 100; };   // v1.57: intensità della correzione delle cuffie (%)
+function hpFiltersOf(id) {        // filtri dell'uscita scelta: cuffie = AutoEQ (all'intensità scelta); casse = profilo + Bassi, Medi, Alti
   const p = HP_PROFILES[id]; if (!p) return [];
-  if (p.kind !== 'casse') return p.f;
+  if (p.kind !== 'casse') { const k = hpK(id) / 100; return k === 1 ? p.f : p.f.map(([t, fc, g, q]) => [t, fc, Math.round(g * k * 100) / 100, q]); }
   const a = hpAdj(id), v = [a.b, a.m, a.t];
   return p.f.concat(HP_TONE.map(([, t, fc, q], i) => [t, fc, v[i], q]).filter(f => f[2]));
 }
@@ -2829,7 +2829,7 @@ function hpRespDb(fl, f, fs) {
 }
 function hpPre(id, fs) {          // volume abbassato del picco della correzione, così non distorce
   const p = HP_PROFILES[id]; if (!p) return 0;
-  if (p.kind !== 'casse') return p.pre;
+  if (p.kind !== 'casse' && hpK(id) === 100) return p.pre;
   const fl = hpFiltersOf(id); let mx = 0;
   for (let i = 0; i <= 240; i++) mx = Math.max(mx, hpRespDb(fl, 20 * Math.pow(1000, i / 240), fs || 48000));
   return -Math.ceil(mx * 10) / 10;
@@ -2907,15 +2907,10 @@ function applyHp() {                      // filtri dell'uscita scelta; senza co
     b.frequency.value = f ? f[1] : 1000; b.gain.value = f && f[0] !== 'HPF' ? f[2] : 0;
     b.Q.value = !f ? 1 : f[0] === 'HPF' ? 20 * Math.log10(f[3]) : f[3];     // per il passa-alto Web Audio vuole Q in dB
   });
-  hpIn.gain.value = on ? Math.pow(10, hpPre(HP.id, ac.sampleRate) / 20) : 1;  // nel confronto resta lo stesso volume: si sente solo la correzione
-  const want = on && !hpAB ? 'filtri' : 'diretto'; if (hpWired === want) return;
+  hpIn.gain.value = on ? Math.pow(10, hpPre(HP.id, ac.sampleRate) / 20) : 1;
+  const want = on ? 'filtri' : 'diretto'; if (hpWired === want) return;
   try { hpIn.disconnect(); } catch (e) {}
   hpIn.connect(want === 'filtri' ? hpFilters[0] : ac.destination); hpWired = want;
-}
-function hpToggleAB() {
-  hpAB = !hpAB; applyHp();
-  log(hpAB ? 'Confronto: correzione esclusa (stesso volume)' : 'Confronto: correzione di nuovo attiva');
-  refreshEqUI();
 }
 let hpAdjT = null;
 function hpSetAdj(id, k, v) {
@@ -2923,17 +2918,23 @@ function hpSetAdj(id, k, v) {
   const n = document.querySelector('[data-hp-pre]'); if (n) n.textContent = hpPreText(id);
   clearTimeout(hpAdjT); hpAdjT = setTimeout(() => { const a = hpAdj(id); log(`Correzione ${HP_PROFILES[id].name}: bassi ${hpDb(a.b)}, medi ${hpDb(a.m)}, alti ${hpDb(a.t)} · volume ${hpDb(hpPre(id, ac && ac.sampleRate))}`); }, 1200);
 }
-const hpPreText = id => { const v = -hpPre(id, ac && ac.sampleRate); return v > 0 ? `Volume abbassato di ${hpDb(v).replace('+', '')} per non distorcere: se serve alzalo sull'amplificatore.` : 'Nessuna spinta sopra lo zero: il volume resta quello normale.'; };
+function hpSetK(id, v) {
+  HP.adj[id] = Object.assign({}, HP.adj[id] || {}, { k: v }); saveJSON(K.hp, HP); applyHp();
+  const n = document.querySelector('[data-hp-pre]'); if (n) n.textContent = hpPreText(id);
+  clearTimeout(hpAdjT); hpAdjT = setTimeout(() => log(`Correzione ${HP_PROFILES[id].name}: intensità ${hpK(id)}% · volume ${hpDb(hpPre(id, ac && ac.sampleRate))}`), 1200);
+}
+const hpPreText = id => { const v = -hpPre(id, ac && ac.sampleRate), casse = HP_PROFILES[id].kind === 'casse';
+  return v > 0 ? `Volume abbassato di ${hpDb(v).replace('+', '')} per non distorcere: se serve alzalo ${casse ? 'sull\'amplificatore' : 'sul telefono'}.` : 'Nessuna spinta sopra lo zero: il volume resta quello normale.'; };
 const hpDb = v => (v > 0 ? '+' : v < 0 ? '−' : '') + String(Math.abs(v)).replace('.', ',') + ' dB';
 function setHp(id) {
   if (!HP_PROFILES[id]) id = 'none';
   if (id === HP.id) { refreshEqUI(); return; }
-  HP.id = id; hpAB = false; saveJSON(K.hp, HP);
+  HP.id = id; saveJSON(K.hp, HP);
   if (!syncEngine()) { HP.id = 'none'; saveJSON(K.hp, HP); toast('Correzione delle cuffie non disponibile in questo browser'); refreshEqUI(); return; }
   applyHp();
   const p = HP_PROFILES[id];
   log(!p ? 'Correzione cuffie e casse spenta' : p.kind === 'casse' ? (a => `Correzione casse: ${p.name} · profilo di partenza · bassi ${hpDb(a.b)}, medi ${hpDb(a.m)}, alti ${hpDb(a.t)} · volume ${hpDb(hpPre(id, ac && ac.sampleRate))}`)(hpAdj(id))
-    : `Correzione cuffie: ${p.name} · misura ${p.src} (AutoEQ) · ${p.f.length} filtri · volume ${hpDb(p.pre)}`);
+    : `Correzione cuffie: ${p.name} · misura ${p.src} (AutoEQ) · ${p.f.length} filtri · intensità ${hpK(id)}% · volume ${hpDb(hpPre(id, ac && ac.sampleRate))}`);
   refreshEqUI();
 }
 function eqWake() { if (ac && ac.state !== 'running') ac.resume().catch(() => {}); }
@@ -5029,12 +5030,11 @@ function hpRow() {
   const box = h('div', { class: 'srow', 'data-hp': '' }, h('strong', null, 'Correzione cuffie e casse'),
     h('p', { class: 'small mut' }, 'Scegli dove stai ascoltando (Basalto non può riconoscerlo da solo). Si somma all\'equalizzatore.'),
     h('div', { class: 'small mut', style: 'margin-top:8px' }, 'Cuffie'),
-    h('div', { class: 'eqp' }, chip(fam === 'none', 'Nessuna', () => setHp('none')), chip(fam === 'alba', 'Meze Alba', () => setHp('alba')),
+    h('div', { class: 'eqp' }, chip(!p || p.kind === 'casse', 'Nessuna', () => { if (p && p.kind !== 'casse') setHp('none'); }), chip(fam === 'alba', 'Meze Alba', () => setHp('alba')),
       chip(fam === 'ananda-stealth', 'HiFiMAN Ananda Stealth', () => setHp('ananda-stealth')), chip(fam === 'fitpro', 'Beats Fit Pro', () => setHp('fitpro'))),
     h('div', { class: 'small mut', style: 'margin-top:8px' }, 'Casse'),
-    h('div', { class: 'eqp' }, chip(fam === 'nobsound', 'Nobsound + SB-PS10', () => setHp('nobsound')), chip(fam === 'technics', 'Technics CA10', () => setHp('technics'))));
-  if (p) box.append(h('button', { class: 'chip' + (hpAB ? ' on' : ''), 'data-hp-ab': '', 'aria-pressed': hpAB ? 'true' : 'false', style: 'margin-top:10px', onclick: hpToggleAB },
-    hpAB ? 'Senza correzione · tocca per riattivarla' : 'Confronta: ascolta senza correzione'));
+    h('div', { class: 'eqp' }, chip(!p || p.kind !== 'casse', 'Nessuna', () => { if (p && p.kind === 'casse') setHp('none'); }),
+      chip(fam === 'nobsound', 'Nobsound + SB-PS10', () => setHp('nobsound')), chip(fam === 'technics', 'Technics CA10', () => setHp('technics'))));
   if (p && p.kind === 'casse') {
     const a = hpAdj(HP.id), id = HP.id;
     box.append(...[h('p', { class: 'small mut' }, id === 'nobsound'
@@ -5045,9 +5045,14 @@ function hpRow() {
       a.b || a.m || a.t ? h('button', { class: 'chip', style: 'margin-top:6px', onclick: () => { clearTimeout(hpAdjT); HP.adj[id] = {}; saveJSON(K.hp, HP); applyHp(); log(`Correzione ${HP_PROFILES[id].name}: cursori azzerati`); refreshEqUI(); } }, 'Azzera Bassi, Medi, Alti') : null].filter(Boolean));
     return box;
   }
-  if (p) box.append(h('p', { class: 'small mut' }, `Misura di ${p.src} (tramite AutoEQ) · ${p.f.length} filtri · volume abbassato di ${hpDb(-p.pre).replace('+', '')} per non distorcere: se serve alza il volume del telefono.` +
-    (HP.id === 'fitpro' ? ' Le Fit Pro arrivano via Bluetooth e, con cancellazione del rumore e modalità trasparenza spente, si regolano da sole (equalizzazione adattiva): qui la correzione è più approssimativa.'
-      : ' Il DAC Fosi DS1 non cambia la risposta (20 Hz–20 kHz ±0,5 dB): non serve correggerlo.') + ' Vale per l\'ascolto: non entra nei remix salvati.'));
+  if (p) {
+    const id = HP.id;
+    box.append(rxSlider('Intensità', 0, 100, 5, hpK(id), v => Math.round(v) + '%', v => hpSetK(id, v)),
+      h('p', { class: 'small mut', 'data-hp-pre': '' }, hpPreText(id)),
+      h('p', { class: 'small mut' }, `Misura di ${p.src} (tramite AutoEQ) · ${p.f.length} filtri. Con l'intensità sotto il 100% la correzione si fa più leggera, in proporzione su tutte le frequenze.` +
+        (id === 'fitpro' ? ' Le Fit Pro arrivano via Bluetooth e, con cancellazione del rumore e modalità trasparenza spente, si regolano da sole (equalizzazione adattiva): qui la correzione è più approssimativa.'
+          : ' Il DAC Fosi DS1 non cambia la risposta (20 Hz–20 kHz ±0,5 dB): non serve correggerlo.') + ' Vale per l\'ascolto: non entra nei remix salvati.'));
+  }
   return box;
 }
 function eqPanel() {
