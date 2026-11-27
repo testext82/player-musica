@@ -136,6 +136,9 @@ details summary{cursor:pointer;font-weight:700;font-size:15px;padding:4px 0}
 .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(var(--st) + 12px);background:var(--inv);color:var(--invfg);padding:10px 16px;border-radius:20px;font-size:14px;font-weight:600;z-index:50;max-width:90vw;text-align:center}
 .qbtn.on{color:var(--acc)}
 .auxmid{display:flex;gap:8px}
+.pout{display:flex;align-items:center;justify-content:center;gap:8px;margin:14px auto 0;height:34px;padding:0 14px;border-radius:17px;background:var(--surf);font-size:13px;font-weight:600;color:var(--mut);max-width:100%}
+.pout.on{color:var(--acc)}.pout svg{flex:none}.pout span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sheet-h{padding:10px 14px 2px;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
 .eq{display:flex;flex-direction:column;gap:10px}
 .eq p{margin:0}
 .eqp{display:flex;flex-wrap:wrap;gap:8px}
@@ -324,6 +327,7 @@ a.item{color:inherit;text-decoration:none}
       <div class="auxmid"><button id="pQueue" class="qbtn">Coda</button><button id="pEq" class="qbtn" aria-label="Equalizzatore">EQ</button><button id="pRx" class="qbtn" aria-label="Remix">Remix</button><button id="pAir" class="qbtn hidden" aria-label="AirPlay: scegli dove ascoltare"></button></div>
       <button id="pRepeat" class="ibtn" aria-label="Ripeti"></button>
     </div>
+    <button id="pOut" class="pout" aria-label="Dove stai ascoltando: tocca per cambiare"></button>
     <div id="queueBox" class="queue hidden"></div>
     <div id="eqBox" class="queue hidden" data-eq-host></div>
     <div id="rxBox" class="queue hidden"></div>
@@ -335,7 +339,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.58';
+const VERSION = '1.59';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -633,6 +637,8 @@ const ICONS = {
   grip: '<line x1="5" y1="9" x2="19" y2="9"/><line x1="5" y1="15" x2="19" y2="15"/>',
   x: '<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>',
   check: '<polyline points="5 12.5 10 17.5 19 7"/>',
+  headph: '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="7" rx="1.5"/><rect x="16.5" y="14" width="4.5" height="7" rx="1.5"/>',
+  speaker: '<rect x="6" y="2.5" width="12" height="19" rx="2"/><circle cx="12" cy="14.5" r="3.3"/><circle cx="12" cy="7.3" r="1"/>',
   dl: '<line x1="12" y1="4" x2="12" y2="15"/><polyline points="7.5 10.5 12 15 16.5 10.5"/><line x1="5" y1="19.5" x2="19" y2="19.5"/>',
   dlOn: '<circle cx="12" cy="12" r="9.5" fill="currentColor" stroke="none"/><path d="M12 7v8.5M8.2 12l3.8 3.8 3.8-3.8" style="stroke:var(--bg)"/>',
   noNet: '<line x1="3.5" y1="3.5" x2="20.5" y2="20.5"/><path d="M8.5 7.4A6 6 0 0 1 17.6 11h.4a3.5 3.5 0 0 1 2.3 6.1"/><path d="M6.7 9.2A4.2 4.2 0 0 0 7.5 17.5h9"/>',
@@ -5143,6 +5149,28 @@ function refreshEqUI() {
   document.querySelectorAll('[data-eq-host]').forEach(host => { if (host.id !== 'eqBox' || eqOpen) host.replaceChildren(eqPanel()); });
   document.querySelectorAll('[data-play-host]').forEach(host => host.replaceChildren(playbackPanel()));
   $('pEq').classList.toggle('on', EQ.on || hpOn());
+  paintOut();
+}
+/* v1.59 · Cambio rapido cuffie/casse dal lettore: sotto i comandi si vede dove stai ascoltando; un tocco e scegli */
+function outLabel() {
+  if (!hpOn()) return 'Nessuna correzione';
+  const p = HP_PROFILES[HP.id];
+  return p.kind === 'casse' ? p.name : p.name + (XF[HP.xf] ? ' · crossfeed ' + XF[HP.xf][0].toLowerCase() : '');
+}
+function paintOut() {
+  const b = $('pOut'); if (!b) return;
+  const p = hpOn() ? HP_PROFILES[HP.id] : null, t = outLabel();
+  b.classList.toggle('on', !!p); b.setAttribute('aria-label', `Dove stai ascoltando: ${t}. Tocca per cambiare`);
+  b.replaceChildren(h('span', { html: ic(p && p.kind === 'casse' ? 'speaker' : 'headph', 18), style: 'display:flex' }), h('span', null, t));
+}
+function openOutSheet() {
+  const it = (id, icon, label) => sAct(HP.id === id ? 'check' : icon, label, () => setHp(id));
+  const cuffie = Object.entries(HP_PROFILES).filter(([, p]) => p.kind !== 'casse'), casse = Object.entries(HP_PROFILES).filter(([, p]) => p.kind === 'casse');
+  openSheet('Dove stai ascoltando', [
+    h('div', { class: 'sheet-h' }, 'Cuffie'), ...cuffie.map(([id, p]) => it(id, 'headph', p.name)),
+    h('div', { class: 'sheet-h' }, 'Casse'), ...casse.map(([id, p]) => it(id, 'speaker', p.name)),
+    h('div', { class: 'sheet-h' }, ' '), it('none', 'x', 'Nessuna correzione'),
+    sAct('settings', 'Regolazioni: intensità, crossfeed, Bassi, Medi, Alti', () => { if (!eqOpen) toggleEqBox(); })]);
 }
 let eqOpen = false;
 function toggleEqBox() {
@@ -7163,6 +7191,7 @@ $('pClose').innerHTML = ic('down', 26); $('pClose').addEventListener('click', ()
 $('pQueueIcon').innerHTML = ic('queue', 24); $('pQueueIcon').addEventListener('click', toggleQueue);
 $('pQueue').addEventListener('click', toggleQueue);
 $('pEq').addEventListener('click', toggleEqBox);
+$('pOut').addEventListener('click', openOutSheet); paintOut();
 $('pRx').addEventListener('click', toggleRxBox);
 // AirPlay (Safari): sceglie casse, HomePod o Apple TV; con AirPlay attivo non cambio lettore, così l'audio resta sul dispositivo scelto
 const airOn = () => !!audio.webkitCurrentPlaybackTargetIsWireless;
