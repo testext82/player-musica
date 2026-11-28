@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <!-- La pagina comunica solo con Dropbox; con MusicBrainz soltanto quando chiedi «Album che non hai» (riceve il nome dell'artista) -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org https://it.wikipedia.org https://en.wikipedia.org https://www.wikidata.org https://upload.wikimedia.org https://api.laut.fm; media-src https://*.dropboxusercontent.com blob: https://*.rai.it https://*.msvdn.net https://*.laut.fm; img-src 'self' data: blob: https://*.dropboxusercontent.com https://upload.wikimedia.org; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' https://api.dropboxapi.com https://content.dropboxapi.com https://musicbrainz.org https://it.wikipedia.org https://en.wikipedia.org https://www.wikidata.org https://upload.wikimedia.org; media-src https://*.dropboxusercontent.com blob: https://*.rai.it https://*.msvdn.net https://*.xdevel.com; img-src 'self' data: blob: https://*.dropboxusercontent.com https://upload.wikimedia.org; manifest-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Basalto">
@@ -342,7 +342,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.62';
+const VERSION = '1.63';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -1322,7 +1322,7 @@ const RADIO = [
   { id: 'rai3', name: 'Rai Radio 3', short: 'R3', color: '#23704a', fmt: 'MP3', urls: ['https://icestreaming.rai.it/3.mp3'] },
   { id: 'deejay', name: 'Radio Deejay', short: 'DJ', color: '#26262b', fmt: 'AAC', urls: ['https://4c4b867c89244861ac216426883d1ad0.msvdn.net/radiodeejay/radiodeejay/play1.m3u8', 'https://streamcdnb1-4c4b867c89244861ac216426883d1ad0.msvdn.net/radiodeejay/radiodeejay/play1.m3u8', 'https://4c4b867c89244861ac216426883d1ad0.msvdn.net/radiodeejay/radiodeejay/master_ma.m3u8'] },
   { id: 'capital', name: 'Radio Capital', short: 'C', color: '#8c1d40', fmt: 'AAC', urls: ['https://4c4b867c89244861ac216426883d1ad0.msvdn.net/radiocapital/radiocapital/play1.m3u8', 'https://streamcdng18-4c4b867c89244861ac216426883d1ad0.msvdn.net/radiocapital/radiocapital/play1.m3u8', 'https://4c4b867c89244861ac216426883d1ad0.msvdn.net/radiocapital/radiocapital/master_ma.m3u8'] },
-  { id: 'lifetime', name: 'Lifetime-Radio', short: 'LT', color: '#5b3a8e', fmt: 'MP3', laut: 'lifetimeradio', urls: ['https://stream.laut.fm/lifetimeradio'] },
+  { id: 'lifegate', name: 'LifeGate Radio', short: 'LG', color: '#2c5e50', fmt: 'MP3', urls: ['https://stream2.xdevel.com/audio0s975809-423/stream/icecast.audio'] },
 ];
 const RAD = { el: null, st: null, by: null, fail: false, sys: 0, song: '', urlI: 0, tries: 0, pausedAt: 0, poll: 0, t0: 0, art: {}, good: {} };
 /* ripartenza automatica: se è iOS a fermare la musica (microfono, Siri, chiamata), riparte quando l'interruzione finisce */
@@ -2826,15 +2826,7 @@ function radioSong(t) {
   if (!RAD.st || t === RAD.song) return;
   RAD.song = t; log(`♪ ${radioStation(RAD.st).name}: ${t}`); radioMediaSession(); radioPaint();
 }
-// titolo in onda di Lifetime-Radio dal servizio pubblico di laut.fm (ogni 30 s, solo mentre suona)
-function radioPollStart() {
-  radioPollStop(); const s = radioStation(RAD.st); if (!s || !s.laut) return;
-  const go = () => fetch(`https://api.laut.fm/station/${s.laut}/current_song`, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(j => {
-    if (!j || RAD.st !== s.id) return;
-    const a = j.artist && j.artist.name, t = j.title; if (t) radioSong(a ? `${a} – ${t}` : t);
-  }).catch(() => {});
-  go(); RAD.poll = setInterval(go, 30000);
-}
+function radioPollStart() {}             // (v1.63: nessuna stazione con titolo da un servizio esterno)
 function radioPollStop() { clearInterval(RAD.poll); RAD.poll = 0; }
 function radioArtUrl(s) {          // immagine per la schermata di blocco: colore e nome della stazione
   if (RAD.art[s.id]) return RAD.art[s.id];
