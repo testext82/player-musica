@@ -89,8 +89,8 @@ h1{font-size:32px;font-weight:800;letter-spacing:-.02em;margin:0;line-height:1.1
 .mini .open{flex:1;min-width:0;display:flex;align-items:center;gap:12px}
 .prog{height:2px;background:var(--line)}
 .prog>div{height:2px;background:var(--acc);width:0}
-.tabs{display:flex;justify-content:space-around;padding:6px 12px calc(6px + var(--sb));border-top:1px solid var(--barline)}
-.tab{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:84px;padding:6px 0;color:var(--mut);font-size:11px;font-weight:600}
+.tabs{display:flex;justify-content:space-around;padding:6px 6px calc(6px + var(--sb));border-top:1px solid var(--barline)}
+.tab{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-width:0;padding:6px 0;color:var(--mut);font-size:11px;font-weight:600}
 .tab.on{color:var(--fg)}
 .player{position:fixed;inset:0;z-index:20;background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch}
 .ptint{position:absolute;left:0;right:0;top:0;height:85vh;background-color:var(--ptint,#000);-webkit-mask-image:linear-gradient(#000 0%,rgba(0,0,0,.55) 45%,transparent 100%);mask-image:linear-gradient(#000 0%,rgba(0,0,0,.55) 45%,transparent 100%);transition:background-color .7s ease;pointer-events:none;z-index:0}
@@ -296,6 +296,7 @@ a.item{color:inherit;text-decoration:none}
     <nav class="tabs" aria-label="Sezioni">
       <button class="tab" data-tab="home"></button>
       <button class="tab" data-tab="lib"></button>
+      <button class="tab" data-tab="radio"></button>
       <button class="tab" data-tab="search"></button>
       <button class="tab" data-tab="settings"></button>
     </nav>
@@ -342,7 +343,7 @@ a.item{color:inherit;text-decoration:none}
 
 <script>
 'use strict';
-const VERSION = '1.63';
+const VERSION = '1.64';
 const AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const API = 'https://api.dropboxapi.com/2/';
@@ -2884,7 +2885,7 @@ function radioNowKids() {
     h('button', { class: 'small mut', style: 'margin-top:10px', onclick: () => radioStop('tasto Spegni') }, curTrack() ? 'Spegni la radio e torna alla musica' : 'Spegni la radio')];
 }
 function viewRadio() {
-  return [backBtnLabeled(prevLabel()), h('h1', { style: 'margin-top:6px' }, 'Radio'),
+  return [NAV.length > 1 ? backBtnLabeled(prevLabel()) : null, h('h1', null, 'Radio'),
     h('div', { class: 'box', 'data-radio-now': '', style: 'margin-top:12px' }, ...radioNowKids()),
     radioGrid(),
     h('p', { class: 'small mut', style: 'margin-top:18px' }, 'Le radio trasmettono compresse (MP3 o AAC): la tua libreria resta in FLAC. La correzione di cuffie e casse e il crossfeed non si applicano alla radio. ⏮ ⏭ sulla schermata di blocco cambiano stazione. Dopo una pausa lunga la radio riprende dalla diretta.'),
@@ -5832,7 +5833,6 @@ function viewHome() {
     navRow('heart', 'Brani preferiti', plural(nT, 'brano', 'brani'), () => go({ v: 'favTracks' })),
     navRow('disc', 'Album preferiti', plural(nA, 'album', 'album'), () => go({ v: 'favAlbums' })),
     navRow('user', 'Artisti preferiti', plural(nR, 'artista', 'artisti'), () => go({ v: 'favArtists' })));
-  nodes.push(h('div', { class: 'between', style: 'margin:24px 0 8px' }, h('div', { class: 'sec-h', style: 'margin:0' }, 'Radio'), h('button', { class: 'small mut', onclick: () => go({ v: 'radio' }) }, 'Tutte')), radioGrid(true));
   nodes.push(h('div', { class: 'sec-h' }, 'Senza rete'), offNavRow());
   const pls = playlists();
   nodes.push(h('div', { class: 'between', style: 'margin:24px 0 4px' }, h('div', { class: 'sec-h', style: 'margin:0' }, 'Playlist'),
@@ -7368,11 +7368,11 @@ function viewSettings() {
 
 /* ---------------- collegamenti dei controlli fissi ---------------- */
 document.querySelectorAll('.tab').forEach(b => {
-  const map = { home: ['home', 'Home'], lib: ['library', 'Libreria'], search: ['search', 'Cerca'], settings: ['settings', 'Impostazioni'] }[b.dataset.tab];
+  const map = { home: ['home', 'Home'], lib: ['library', 'Libreria'], radio: ['radio', 'Radio'], search: ['search', 'Cerca'], settings: ['settings', 'Impostazioni'] }[b.dataset.tab];
   b.innerHTML = ic(map[0], 22) + `<span>${map[1]}</span>`;
   b.addEventListener('click', () => goTab(b.dataset.tab));
 });
-$('miniOpen').addEventListener('click', () => RAD.st ? go({ v: 'radio' }) : openPlayer());
+$('miniOpen').addEventListener('click', () => RAD.st ? goTab('radio') : openPlayer());
 $('miniPP').addEventListener('click', () => RAD.st ? radioToggle() : togglePlay());
 $('pClose').innerHTML = ic('down', 26); $('pClose').addEventListener('click', () => closePlayer());
 // Trascinando verso il basso in qualunque punto il lettore si abbassa (tranne sulla barra del tempo, sulla coda e sull'equalizzatore)
